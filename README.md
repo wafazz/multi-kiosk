@@ -97,6 +97,11 @@
 - Super Admin company logo upload with live preview.
 - Dynamic brand primary color theming reflected across the HQ sidebar and printed receipts.
 
+### 8. 🖨️ Direct Hardware ESC/POS Thermal Printing & Cash Drawer Kick
+- Native **WebSerial API driver** for high-speed direct binary communication with 58mm (32 cols) and 80mm (42/48 cols) thermal printers (Epson, Sunmi, Star Micronics, Xprinter).
+- **Automated RJ11 Cash Drawer Kick:** Sends hardware electrical pulses (`ESC p 0 25 250`) to pop open the physical cash till automatically upon cash checkout.
+- Configurable baud rates (9600 to 115200), auto-print toggles, and hardware test diagnostics stored in kiosk device local storage.
+
 ---
 
 ## 🛠️ Architecture & Technology Stack
@@ -272,31 +277,34 @@ php artisan test
 ### Test Suite Summary:
 ```text
    PASS  Tests\Unit\BOMCalculationTest
-  ✓ bom dynamic cost calculation ................................. 0.37s  
+  ✓ bom dynamic cost calculation ................................. 0.71s  
+
+   PASS  Tests\Unit\EscPosGeneratorTest
+  ✓ escpos standard command definitions .......................... 0.05s  
 
    PASS  Tests\Unit\ExampleTest
-  ✓ that true is true ............................................ 0.01s  
+  ✓ that true is true
 
    PASS  Tests\Unit\HourlyWageCalculationTest
-  ✓ 15 minute rounding and hourly wage calculation ................ 0.03s  
+  ✓ 15 minute rounding and hourly wage calculation ................ 0.05s  
 
    PASS  Tests\Feature\ExampleTest
-  ✓ the application redirects root to dashboard .................. 0.08s  
+  ✓ the application redirects root to dashboard .................. 0.11s  
 
    PASS  Tests\Feature\KioskOrderAndInventoryTest
   ✓ kiosk order processes and deducts bom stock ................... 0.12s  
 
    PASS  Tests\Feature\ModifierAndBOMDeductionTest
-  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.20s  
+  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.09s  
 
    PASS  Tests\Feature\StaffAttendanceAndClockingTest
-  ✓ staff can clock in and clock out at kiosk with pin ............ 0.13s  
+  ✓ staff can clock in and clock out at kiosk with pin ............ 0.08s  
 
    PASS  Tests\Feature\StockTransferLifecycleTest
-  ✓ stock transfer lifecycle moves inventory atomically .......... 0.06s  
+  ✓ stock transfer lifecycle moves inventory atomically .......... 0.05s  
 
-  Tests:    8 passed (27 assertions)
-  Duration: 1.98s
+  Tests:    9 passed (35 assertions)
+  Duration: 1.77s
 ```
 
 ---

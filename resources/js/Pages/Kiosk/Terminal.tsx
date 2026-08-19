@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import axios from 'axios';
 import {
@@ -22,8 +22,12 @@ import {
   Store,
   Layers,
   Sliders,
-  Check
+  Check,
+  Zap,
+  Cable,
+  Settings
 } from 'lucide-react';
+import { EscPosBuilder, WebSerialPrinter, ReceiptData } from '../../Utils/escpos';
 
 interface ModifierOption {
   id: number;
@@ -77,6 +81,14 @@ interface CartItem {
   modifiers: ModifierSelection[];
 }
 
+interface PrinterConfig {
+  connectionType: 'WEBSERIAL' | 'BROWSER';
+  paperWidth: '58mm' | '80mm';
+  baudRate: number;
+  autoKickDrawer: boolean;
+  autoPrint: boolean;
+}
+
 interface Props {
   company: any;
   kiosks: Kiosk[];
@@ -112,6 +124,27 @@ export default function KioskTerminal({
   const [showPayModal, setShowPayModal] = useState<boolean>(false);
   const [showReceiptModal, setShowReceiptModal] = useState<boolean>(false);
   const [showClockModal, setShowClockModal] = useState<boolean>(false);
+  const [showPrinterModal, setShowPrinterModal] = useState<boolean>(false);
+
+  // Hardware Printer state
+  const serialPrinter = useRef<WebSerialPrinter>(new WebSerialPrinter());
+  const [isPrinterConnected, setIsPrinterConnected] = useState<boolean>(false);
+  const [printerStatusMessage, setPrinterStatusMessage] = useState<string>('');
+  const [printerConfig, setPrinterConfig] = useState<PrinterConfig>(() => {
+    const saved = localStorage.getItem('mk_printer_config');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return {
+      connectionType: 'WEBSERIAL',
+      paperWidth: '58mm',
+      baudRate: 9600,
+      autoKickDrawer: true,
+      autoPrint: false,
+    };
+  });
 
   // Payment state
   const [paymentMethod, setPaymentMethod] = useState<string>('CASH');
@@ -134,6 +167,79 @@ export default function KioskTerminal({
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // Save printer config
+  const savePrinterConfig = (updated: PrinterConfig) => {
+    setPrinterConfig(updated);
+    localStorage.setItem('mk_printer_config', JSON.stringify(updated));
+  };
+
+  // Connect WebSerial Printer
+  const handleConnectPrinter = async () => {
+    setPrinterStatusMessage('');
+    try {
+      await serialPrinter.current.connect(printerConfig.baudRate);
+      setIsPrinterConnected(true);
+      setPrinterStatusMessage('Thermal printer paired & connected successfully via WebSerial!');
+    } catch (err: any) {
+      setPrinterStatusMessage(err.message || 'Failed to connect to printer.');
+    }
+  };
+
+  // Test Print & Kick Drawer
+  const handleTestPrint = async () => {
+    setPrinterStatusMessage('');
+    try {
+      const testData: ReceiptData = {
+        companyName: company?.name || 'MULTI-KIOSK ENTERPRISE',
+        branchName: currentKiosk.branch.name,
+        kioskCode: currentKiosk.kiosk_code,
+        kioskName: currentKiosk.kiosk_name,
+        orderNumber: 'TEST-PRT-0001',
+        orderedAt: new Date().toLocaleString(),
+        items: [
+          { name: 'Iced Caffe Latte (16oz)', quantity: 1, unit_price: 12.00, modifiers: [{ name: 'Extra Espresso Shot', price_adjustment: 3.00 }] },
+          { name: 'Butter Croissant', quantity: 1, unit_price: 7.50 },
+        ],
+        subtotal: 22.50,
+        taxAmount: 1.35,
+        netAmount: 23.85,
+        paymentMethod: 'CASH',
+        cashTendered: 50.00,
+        changeDue: 26.15,
+        paperWidth: printerConfig.paperWidth,
+        footerMessage: 'Hardware Diagnostic Test Passed',
+      };
+
+      const bytes = EscPosBuilder.buildReceipt(testData, printerConfig.autoKickDrawer);
+
+      if (isPrinterConnected) {
+        await serialPrinter.current.print(bytes);
+        setPrinterStatusMessage('Test receipt sent to ESC/POS thermal printer.');
+      } else {
+        // Fallback simulate or attempt connection
+        await handleConnectPrinter();
+        await serialPrinter.current.print(bytes);
+      }
+    } catch (err: any) {
+      setPrinterStatusMessage('Print error: ' + (err.message || 'Check printer connection.'));
+    }
+  };
+
+  // Manual Kick Cash Drawer
+  const handleKickDrawerOnly = async () => {
+    try {
+      if (isPrinterConnected) {
+        await serialPrinter.current.kickDrawerOnly();
+      } else {
+        await handleConnectPrinter();
+        await serialPrinter.current.kickDrawerOnly();
+      }
+      setPrinterStatusMessage('Cash drawer kick pulse sent.');
+    } catch (err: any) {
+      alert('Could not kick drawer: ' + (err.message || 'Please connect printer first.'));
+    }
+  };
 
   // Filter products
   const categories = ['ALL', ...Array.from(new Set(products.map((p) => p.category)))];
@@ -180,7 +286,6 @@ export default function KioskTerminal({
   // Modifier toggles inside Customize Modal
   const handleToggleModifier = (group: ModifierGroup, option: ModifierOption) => {
     if (group.selection_type === 'SINGLE') {
-      // Remove other options from this same group
       const optionIdsInGroup = group.options.map((o) => o.id);
       const filtered = selectedModifiers.filter((m) => !optionIdsInGroup.includes(m.modifier_option_id));
       setSelectedModifiers([
@@ -192,7 +297,6 @@ export default function KioskTerminal({
         },
       ]);
     } else {
-      // Multiple selection
       const exists = selectedModifiers.some((m) => m.modifier_option_id === option.id);
       if (exists) {
         setSelectedModifiers(selectedModifiers.filter((m) => m.modifier_option_id !== option.id));
@@ -220,7 +324,6 @@ export default function KioskTerminal({
   const handleAddCustomizedToCart = () => {
     if (!customizingProduct) return;
 
-    // Generate unique key based on sorted modifier IDs
     const modKey = selectedModifiers
       .map((m) => m.modifier_option_id)
       .sort()
@@ -304,12 +407,54 @@ export default function KioskTerminal({
 
       const res = await axios.post('/api/v1/kiosk/order', payload);
       if (res.data.success) {
-        setLastOrder({
+        const orderInfo = {
           ...res.data.order,
           items: cart,
           cashTendered: paymentMethod === 'CASH' ? cashTendered : grandTotal,
           changeDue: paymentMethod === 'CASH' ? Math.max(0, cashTendered - grandTotal) : 0,
-        });
+        };
+
+        setLastOrder(orderInfo);
+
+        // Hardware ESC/POS Kick Drawer & Auto-Print Action
+        if (isPrinterConnected) {
+          try {
+            if (printerConfig.autoKickDrawer && paymentMethod === 'CASH') {
+              await serialPrinter.current.kickDrawerOnly();
+            }
+
+            if (printerConfig.autoPrint) {
+              const receiptBytes = EscPosBuilder.buildReceipt(
+                {
+                  companyName: company?.name || 'MULTI-KIOSK',
+                  branchName: currentKiosk.branch.name,
+                  kioskCode: currentKiosk.kiosk_code,
+                  kioskName: currentKiosk.kiosk_name,
+                  orderNumber: orderInfo.order_number,
+                  orderedAt: orderInfo.ordered_at || new Date().toLocaleString(),
+                  items: cart.map((c) => ({
+                    name: c.product.name,
+                    quantity: c.quantity,
+                    unit_price: c.unit_price,
+                    modifiers: c.modifiers,
+                  })),
+                  subtotal: subtotal,
+                  taxAmount: tax,
+                  netAmount: grandTotal,
+                  paymentMethod: paymentMethod,
+                  cashTendered: orderInfo.cashTendered,
+                  changeDue: orderInfo.changeDue,
+                  paperWidth: printerConfig.paperWidth,
+                },
+                false
+              );
+              await serialPrinter.current.print(receiptBytes);
+            }
+          } catch (pErr) {
+            console.error('Auto-print error:', pErr);
+          }
+        }
+
         setCart([]);
         setShowPayModal(false);
         setShowReceiptModal(true);
@@ -318,6 +463,46 @@ export default function KioskTerminal({
       alert(err.response?.data?.message || 'Order processing failed. Please try again.');
     } finally {
       setIsProcessingOrder(false);
+    }
+  };
+
+  // Manual Print ESC/POS from Receipt Modal
+  const handlePrintEscPosFromModal = async () => {
+    if (!lastOrder) return;
+    try {
+      const receiptBytes = EscPosBuilder.buildReceipt(
+        {
+          companyName: company?.name || 'MULTI-KIOSK',
+          branchName: currentKiosk.branch.name,
+          kioskCode: currentKiosk.kiosk_code,
+          kioskName: currentKiosk.kiosk_name,
+          orderNumber: lastOrder.order_number,
+          orderedAt: lastOrder.ordered_at || new Date().toLocaleString(),
+          items: lastOrder.items?.map((c: any) => ({
+            name: c.product.name,
+            quantity: c.quantity,
+            unit_price: c.unit_price,
+            modifiers: c.modifiers,
+          })) || [],
+          subtotal: lastOrder.total_amount || grandTotal,
+          taxAmount: lastOrder.tax_amount || tax,
+          netAmount: lastOrder.net_amount || grandTotal,
+          paymentMethod: lastOrder.payment_method || paymentMethod,
+          cashTendered: lastOrder.cashTendered,
+          changeDue: lastOrder.changeDue,
+          paperWidth: printerConfig.paperWidth,
+        },
+        false
+      );
+
+      if (isPrinterConnected) {
+        await serialPrinter.current.print(receiptBytes);
+      } else {
+        await handleConnectPrinter();
+        await serialPrinter.current.print(receiptBytes);
+      }
+    } catch (err: any) {
+      alert('Thermal print error: ' + (err.message || 'Check printer connection.'));
     }
   };
 
@@ -411,8 +596,33 @@ export default function KioskTerminal({
           <span>{currentTime}</span>
         </div>
 
-        {/* Right Staff & Clocking Action */}
+        {/* Right Hardware Actions & Staff */}
         <div className="d-flex align-items-center gap-2">
+          {/* Cash Drawer Fast Kick Button */}
+          <button
+            onClick={handleKickDrawerOnly}
+            className="btn btn-sm btn-outline-warning rounded-pill px-3 d-flex align-items-center gap-1"
+            title="Send RJ11 pulse to kick open cash drawer"
+          >
+            <Zap size={14} />
+            <span className="d-none d-sm-inline">Open Drawer</span>
+          </button>
+
+          {/* Hardware Printer Status & Config Button */}
+          <button
+            onClick={() => setShowPrinterModal(true)}
+            className={`btn btn-sm ${
+              isPrinterConnected ? 'btn-outline-success' : 'btn-outline-secondary'
+            } text-white rounded-pill px-3 d-flex align-items-center gap-1`}
+            title="Thermal Printer & Cash Drawer Hardware Settings"
+          >
+            <Printer size={14} />
+            <span className="d-none d-sm-inline">
+              {isPrinterConnected ? `ESC/POS (${printerConfig.paperWidth})` : 'Pair Printer'}
+            </span>
+          </button>
+
+          {/* Staff Shift Pill */}
           {activeShift ? (
             <div className="d-flex align-items-center gap-2 bg-slate-800 px-3 py-1 rounded-pill border border-secondary border-opacity-50">
               <UserCheck size={14} className="text-success" />
@@ -823,7 +1033,7 @@ export default function KioskTerminal({
         </div>
       )}
 
-      {/* Modal: Order Receipt & BOM Deduction Proof */}
+      {/* Modal: Order Receipt, ESC/POS Print & Cash Drawer */}
       {showReceiptModal && lastOrder && (
         <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }} tabIndex={-1}>
           <div className="modal-dialog modal-dialog-centered">
@@ -896,20 +1106,166 @@ export default function KioskTerminal({
                 </div>
               </div>
 
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-outline-secondary btn-sm d-flex align-items-center gap-1"
-                  onClick={() => window.print()}
-                >
-                  <Printer size={14} /> Print Receipt
-                </button>
+              <div className="modal-footer d-flex justify-content-between flex-wrap gap-2">
+                <div className="d-flex gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-outline-primary btn-sm d-flex align-items-center gap-1"
+                    onClick={handlePrintEscPosFromModal}
+                    title="Direct binary ESC/POS thermal print"
+                  >
+                    <Printer size={14} /> ESC/POS Print
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline-warning btn-sm d-flex align-items-center gap-1"
+                    onClick={handleKickDrawerOnly}
+                    title="Pulse cash drawer"
+                  >
+                    <Zap size={14} /> Kick Drawer
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary btn-sm"
+                    onClick={() => window.print()}
+                    title="Standard browser dialog print"
+                  >
+                    Browser Print
+                  </button>
+                </div>
                 <button
                   type="button"
                   className="btn btn-primary btn-sm px-4"
                   onClick={() => setShowReceiptModal(false)}
                 >
                   Next Order
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Hardware Printer & Cash Drawer Configuration */}
+      {showPrinterModal && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }} tabIndex={-1}>
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content bg-slate-900 text-white border border-secondary shadow-lg">
+              <div className="modal-header border-secondary">
+                <h5 className="modal-title fw-bold d-flex align-items-center gap-2">
+                  <Printer size={18} className="text-info" />
+                  Thermal Printer & Cash Drawer Hardware
+                </h5>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowPrinterModal(false)}></button>
+              </div>
+
+              <div className="modal-body p-3">
+                {/* Connection Status Card */}
+                <div className={`p-3 rounded-3 border mb-3 ${isPrinterConnected ? 'bg-success bg-opacity-10 border-success' : 'bg-slate-950 border-secondary'}`}>
+                  <div className="d-flex align-items-center justify-content-between">
+                    <div>
+                      <div className="fw-bold text-white small">Printer Connection Status:</div>
+                      <div className={`small fw-semibold ${isPrinterConnected ? 'text-success' : 'text-warning'}`}>
+                        {isPrinterConnected ? '● Online (WebSerial Connected)' : '○ Disconnected / Unpaired'}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleConnectPrinter}
+                      className="btn btn-primary btn-sm d-flex align-items-center gap-1"
+                    >
+                      <Cable size={14} />
+                      <span>{isPrinterConnected ? 'Re-pair USB Printer' : 'Pair USB Printer'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {printerStatusMessage && (
+                  <div className="alert alert-info p-2 small mb-3 border-0">
+                    {printerStatusMessage}
+                  </div>
+                )}
+
+                {/* Configuration Options */}
+                <div className="row g-2 mb-3">
+                  <div className="col-6">
+                    <label className="form-label small text-muted">Paper Width</label>
+                    <select
+                      className="form-select form-select-sm bg-dark text-white border-secondary"
+                      value={printerConfig.paperWidth}
+                      onChange={(e) => savePrinterConfig({ ...printerConfig, paperWidth: e.target.value as any })}
+                    >
+                      <option value="58mm">58mm (32 Columns Standard)</option>
+                      <option value="80mm">80mm (42/48 Columns Wide)</option>
+                    </select>
+                  </div>
+
+                  <div className="col-6">
+                    <label className="form-label small text-muted">Baud Rate</label>
+                    <select
+                      className="form-select form-select-sm bg-dark text-white border-secondary font-monospace"
+                      value={printerConfig.baudRate}
+                      onChange={(e) => savePrinterConfig({ ...printerConfig, baudRate: parseInt(e.target.value) })}
+                    >
+                      <option value={9600}>9600 (Epson Standard)</option>
+                      <option value={19200}>19200</option>
+                      <option value={38400}>38400 (Sunmi / Star)</option>
+                      <option value={115200}>115200 (High Speed)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-950 rounded-3 border border-secondary border-opacity-50 mb-3 d-flex flex-column gap-2">
+                  <div className="form-check form-switch">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="autoKickCheck"
+                      checked={printerConfig.autoKickDrawer}
+                      onChange={(e) => savePrinterConfig({ ...printerConfig, autoKickDrawer: e.target.checked })}
+                    />
+                    <label className="form-check-label small text-white" htmlFor="autoKickCheck">
+                      <strong>Auto-Kick Cash Drawer</strong> on Cash checkout
+                    </label>
+                  </div>
+
+                  <div className="form-check form-switch">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="autoPrintCheck"
+                      checked={printerConfig.autoPrint}
+                      onChange={(e) => savePrinterConfig({ ...printerConfig, autoPrint: e.target.checked })}
+                    />
+                    <label className="form-check-label small text-white" htmlFor="autoPrintCheck">
+                      <strong>Silent Auto-Print</strong> thermal receipt on order completion
+                    </label>
+                  </div>
+                </div>
+
+                {/* Diagnostics */}
+                <div className="d-flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTestPrint}
+                    className="btn btn-outline-info btn-sm flex-grow-1 d-flex align-items-center justify-content-center gap-1"
+                  >
+                    <Printer size={14} /> Test Receipt Print
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleKickDrawerOnly}
+                    className="btn btn-outline-warning btn-sm flex-grow-1 d-flex align-items-center justify-content-center gap-1"
+                  >
+                    <Zap size={14} /> Test Drawer Kick
+                  </button>
+                </div>
+              </div>
+
+              <div className="modal-footer border-secondary">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowPrinterModal(false)}>
+                  Close
                 </button>
               </div>
             </div>
