@@ -120,6 +120,13 @@
 - **Automated Background Sync:** Automatically detects network recovery via browser connection events and flushes buffered orders to the backend cloud.
 - **Idempotency Guarantee:** Client-generated UUIDs prevent duplicate BOM deductions or double-counted sales on intermittent networks.
 
+### 12. 💳 Dynamic Payment Gateway (Billplz FPX & Dynamic QR)
+- **API v3 Integration:** Seamless connection to Billplz collections for automated bill generation and online FPX banking.
+- **Dynamic Kiosk Checkout:** Generates unique bill IDs, payment URLs, and mobile QR codes on-demand directly at the POS.
+- **Real-Time Polling & Webhook Engine:** Instant status detection via 2.5s polling loop and SHA256 HMAC `X-Signature` callback verification.
+- **Automated Settlement & Stock Deductions:** Marking a bill as `PAID` automatically triggers recipe BOM raw material deductions and financial logging.
+- **Sandbox Simulation Suite:** Built-in simulation tool for rapid local demonstration without live bank accounts.
+
 ---
 
 ## 🛠️ Architecture & Technology Stack
@@ -306,17 +313,20 @@ php artisan test
    PASS  Tests\Unit\HourlyWageCalculationTest
   ✓ 15 minute rounding and hourly wage calculation ................ 0.05s  
 
+   PASS  Tests\Feature\BillplzPaymentGatewayTest
+  ✓ billplz bill creation webhook verification and bom deduction .. 0.17s  
+
    PASS  Tests\Feature\ExampleTest
-  ✓ the application redirects root to dashboard .................. 0.11s  
+  ✓ the application redirects root to dashboard .................. 0.05s  
 
    PASS  Tests\Feature\KioskOrderAndInventoryTest
-  ✓ kiosk order processes and deducts bom stock ................... 0.11s  
+  ✓ kiosk order processes and deducts bom stock ................... 0.08s  
 
    PASS  Tests\Feature\KitchenDisplaySystemTest
-  ✓ kds ticket lifecycle and item prepared toggle ................ 0.10s  
+  ✓ kds ticket lifecycle and item prepared toggle ................ 0.12s  
 
    PASS  Tests\Feature\ModifierAndBOMDeductionTest
-  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.08s  
+  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.15s  
 
    PASS  Tests\Feature\OfflineOrderSyncTest
   ✓ offline order idempotent sync and inventory deduction ........ 0.09s  
@@ -325,13 +335,13 @@ php artisan test
   ✓ shift lifecycle with opening float and z report variance ..... 0.06s  
 
    PASS  Tests\Feature\StaffAttendanceAndClockingTest
-  ✓ staff can clock in and clock out at kiosk with pin ............ 0.07s  
+  ✓ staff can clock in and clock out at kiosk with pin ............ 0.09s  
 
    PASS  Tests\Feature\StockTransferLifecycleTest
-  ✓ stock transfer lifecycle moves inventory atomically .......... 0.05s  
+  ✓ stock transfer lifecycle moves inventory atomically .......... 0.08s  
 
-  Tests:    12 passed (74 assertions)
-  Duration: 2.07s
+  Tests:    13 passed (84 assertions)
+  Duration: 2.28s
 ```
 
 ---

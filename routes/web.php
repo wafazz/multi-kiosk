@@ -77,6 +77,13 @@ Route::get('/payroll', [PayrollReportController::class, 'index'])->name('payroll
 Route::get('/settings/branding', [BrandingController::class, 'index'])->name('settings.branding');
 Route::post('/settings/branding', [BrandingController::class, 'update'])->name('settings.branding.update');
 
+// Payment Gateway Settings & Billplz
+Route::get('/settings/payment-gateways', [\App\Http\Controllers\PaymentGatewayController::class, 'settings'])->name('settings.gateways.index');
+Route::post('/settings/payment-gateways', [\App\Http\Controllers\PaymentGatewayController::class, 'update'])->name('settings.gateways.update');
+Route::post('/api/v1/payment/billplz/create-bill', [\App\Http\Controllers\PaymentGatewayController::class, 'apiCreateBill'])->name('api.payment.billplz.create');
+Route::get('/api/v1/payment/billplz/status/{billId}', [\App\Http\Controllers\PaymentGatewayController::class, 'apiCheckStatus'])->name('api.payment.billplz.status');
+Route::post('/api/v1/payment/billplz/webhook', [\App\Http\Controllers\PaymentGatewayController::class, 'apiWebhook'])->name('api.payment.billplz.webhook');
+
 // Shift Management & Cash Float (Z-Reports)
 Route::get('/shifts', [\App\Http\Controllers\ShiftController::class, 'index'])->name('shifts.index');
 Route::post('/api/v1/kiosk/shift/open', [\App\Http\Controllers\ShiftController::class, 'apiOpenShift'])->name('api.kiosk.shift.open');

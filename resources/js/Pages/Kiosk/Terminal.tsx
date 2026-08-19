@@ -34,7 +34,10 @@ import {
   WifiOff,
   RotateCw,
   Database,
-  HardDrive
+  HardDrive,
+  Globe,
+  ExternalLink,
+  ShieldCheck
 } from 'lucide-react';
 import { EscPosBuilder, WebSerialPrinter, ReceiptData } from '../../Utils/escpos';
 import { OfflineStorageEngine } from '../../Utils/offlineQueue';
@@ -152,6 +155,16 @@ export default function KioskTerminal({
   const [showClockModal, setShowClockModal] = useState<boolean>(false);
   const [showPrinterModal, setShowPrinterModal] = useState<boolean>(false);
 
+  // Billplz Dynamic Payment State
+  const [billplzState, setBillplzState] = useState<{
+    isGenerating: boolean;
+    billId?: string;
+    billUrl?: string;
+    orderId?: number;
+    orderNumber?: string;
+  } | null>(null);
+  const billplzPollingRef = useRef<any>(null);
+
   // Shift Management Modals
   const [showOpenShiftModal, setShowOpenShiftModal] = useState<boolean>(false);
   const [showCloseShiftModal, setShowCloseShiftModal] = useState<boolean>(false);
@@ -237,6 +250,7 @@ export default function KioskTerminal({
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      if (billplzPollingRef.current) clearInterval(billplzPollingRef.current);
     };
   }, []);
 
@@ -285,45 +299,6 @@ export default function KioskTerminal({
       setPrinterStatusMessage('Thermal printer paired & connected successfully via WebSerial!');
     } catch (err: any) {
       setPrinterStatusMessage(err.message || 'Failed to connect to printer.');
-    }
-  };
-
-  // Test Print & Kick Drawer
-  const handleTestPrint = async () => {
-    setPrinterStatusMessage('');
-    try {
-      const testData: ReceiptData = {
-        companyName: company?.name || 'MULTI-KIOSK ENTERPRISE',
-        branchName: currentKiosk.branch.name,
-        kioskCode: currentKiosk.kiosk_code,
-        kioskName: currentKiosk.kiosk_name,
-        orderNumber: 'TEST-PRT-0001',
-        orderedAt: new Date().toLocaleString(),
-        items: [
-          { name: 'Iced Caffe Latte (16oz)', quantity: 1, unit_price: 12.00, modifiers: [{ name: 'Extra Espresso Shot', price_adjustment: 3.00 }] },
-          { name: 'Butter Croissant', quantity: 1, unit_price: 7.50 },
-        ],
-        subtotal: 22.50,
-        taxAmount: 1.35,
-        netAmount: 23.85,
-        paymentMethod: 'CASH',
-        cashTendered: 50.00,
-        changeDue: 26.15,
-        paperWidth: printerConfig.paperWidth,
-        footerMessage: 'Hardware Diagnostic Test Passed',
-      };
-
-      const bytes = EscPosBuilder.buildReceipt(testData, printerConfig.autoKickDrawer);
-
-      if (isPrinterConnected) {
-        await serialPrinter.current.print(bytes);
-        setPrinterStatusMessage('Test receipt sent to ESC/POS thermal printer.');
-      } else {
-        await handleConnectPrinter();
-        await serialPrinter.current.print(bytes);
-      }
-    } catch (err: any) {
-      setPrinterStatusMessage('Print error: ' + (err.message || 'Check printer connection.'));
     }
   };
 
@@ -377,7 +352,6 @@ export default function KioskTerminal({
         setLiveXReportData(res.data.data);
         setShowXReportModal(true);
 
-        // Optional auto thermal print of X-Report
         if (isPrinterConnected) {
           const xBytes = EscPosBuilder.buildZReport(res.data.data, true, printerConfig.paperWidth);
           await serialPrinter.current.print(xBytes);
@@ -407,7 +381,6 @@ export default function KioskTerminal({
         setShiftPinInput('');
         setClosingCashInput('');
 
-        // Automatically print official Z-Report and kick drawer
         if (isPrinterConnected) {
           const zBytes = EscPosBuilder.buildZReport(res.data.z_report, false, printerConfig.paperWidth);
           await serialPrinter.current.print(zBytes);
@@ -418,6 +391,130 @@ export default function KioskTerminal({
     } finally {
       setIsProcessingShift(false);
     }
+  };
+
+  // --- BILLPLZ GATEWAY HANDLERS ---
+  const handleInitiateBillplz = async () => {
+    if (cart.length === 0 || isProcessingOrder) return;
+    setIsProcessingOrder(true);
+    setBillplzState({ isGenerating: true });
+
+    try {
+      const clientUuid = `ORD-${currentKiosk.kiosk_code}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+      const itemsPayload = cart.map((item) => ({
+        product_id: item.product.id,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        modifiers: item.modifiers.map((m) => ({
+          modifier_option_id: m.modifier_option_id,
+          name: m.name,
+          price_adjustment: m.price_adjustment,
+        })),
+      }));
+
+      // 1. Create order
+      const orderRes = await axios.post('/api/v1/kiosk/order', {
+        client_uuid: clientUuid,
+        kiosk_id: currentKiosk.id,
+        staff_id: activeShift?.staff_id || null,
+        payment_method: 'BILLPLZ',
+        dining_option: diningOption,
+        discount_amount: 0,
+        items: itemsPayload,
+      });
+
+      const orderData = orderRes.data.order;
+
+      // 2. Generate Billplz Bill
+      const billRes = await axios.post('/api/v1/payment/billplz/create-bill', {
+        order_id: orderData.id,
+        customer_name: 'Kiosk Customer',
+        customer_email: 'customer@multi-kiosk.local',
+      });
+
+      if (billRes.data.success) {
+        setBillplzState({
+          isGenerating: false,
+          billId: billRes.data.bill_id,
+          billUrl: billRes.data.bill_url,
+          orderId: orderData.id,
+          orderNumber: orderData.order_number,
+        });
+
+        // Start real-time polling every 2.5s
+        if (billplzPollingRef.current) clearInterval(billplzPollingRef.current);
+        billplzPollingRef.current = setInterval(async () => {
+          try {
+            const statusRes = await axios.get(`/api/v1/payment/billplz/status/${billRes.data.bill_id}`);
+            if (statusRes.data.success && statusRes.data.paid) {
+              clearInterval(billplzPollingRef.current);
+              handleBillplzPaidSuccess(orderData, billRes.data.bill_id);
+            }
+          } catch (e) {}
+        }, 2500);
+      } else {
+        alert(billRes.data.message || 'Could not generate Billplz bill.');
+        setBillplzState(null);
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Billplz checkout initiation failed.');
+      setBillplzState(null);
+    } finally {
+      setIsProcessingOrder(false);
+    }
+  };
+
+  const handleSimulateBillplzPayment = async () => {
+    if (!billplzState?.billId) return;
+    try {
+      await axios.post('/api/v1/payment/billplz/webhook', {
+        id: billplzState.billId,
+        paid: true,
+        paid_at: new Date().toISOString(),
+      });
+
+      if (billplzPollingRef.current) clearInterval(billplzPollingRef.current);
+
+      const orderInfo = {
+        order_number: billplzState.orderNumber || 'ORD-BILLPLZ-01',
+        branch_name: currentKiosk.branch.name,
+        kiosk_code: currentKiosk.kiosk_code,
+        kiosk_name: currentKiosk.kiosk_name,
+        items: cart,
+        total_amount: subtotal,
+        tax_amount: tax,
+        net_amount: grandTotal,
+        payment_method: 'BILLPLZ',
+        cashTendered: grandTotal,
+        changeDue: 0,
+        ordered_at: new Date().toLocaleString(),
+      };
+
+      setLastOrder(orderInfo);
+      setCart([]);
+      setBillplzState(null);
+      setShowPayModal(false);
+      setShowReceiptModal(true);
+    } catch (err) {
+      alert('Could not simulate payment.');
+    }
+  };
+
+  const handleBillplzPaidSuccess = (orderData: any, billId: string) => {
+    const orderInfo = {
+      ...orderData,
+      items: cart,
+      payment_method: 'BILLPLZ',
+      cashTendered: grandTotal,
+      changeDue: 0,
+    };
+
+    setLastOrder(orderInfo);
+    setCart([]);
+    setBillplzState(null);
+    setShowPayModal(false);
+    setShowReceiptModal(true);
   };
 
   // Filter products
@@ -559,10 +656,11 @@ export default function KioskTerminal({
   const handleOpenPayment = () => {
     if (cart.length === 0) return;
     setCashTendered(grandTotal);
+    setBillplzState(null);
     setShowPayModal(true);
   };
 
-  // Process Order with Resilient IndexedDB Offline Fallback
+  // Process Standard Order
   const handleCompleteOrder = async () => {
     if (isProcessingOrder || cart.length === 0) return;
     setIsProcessingOrder(true);
@@ -650,7 +748,6 @@ export default function KioskTerminal({
     if (orderInfo) {
       setLastOrder(orderInfo);
 
-      // Hardware ESC/POS Kick Drawer & Auto-Print Action
       if (isPrinterConnected) {
         try {
           if (printerConfig.autoKickDrawer && paymentMethod === 'CASH') {
@@ -883,7 +980,6 @@ export default function KioskTerminal({
 
         {/* Right Hardware Actions & Staff */}
         <div className="d-flex align-items-center gap-2">
-          {/* Cash Drawer Fast Kick Button */}
           <button
             onClick={handleKickDrawerOnly}
             className="btn btn-sm btn-outline-warning rounded-pill px-3 d-flex align-items-center gap-1"
@@ -893,7 +989,6 @@ export default function KioskTerminal({
             <span className="d-none d-sm-inline">Open Drawer</span>
           </button>
 
-          {/* Hardware Printer Status & Config Button */}
           <button
             onClick={() => setShowPrinterModal(true)}
             className={`btn btn-sm ${
@@ -907,7 +1002,6 @@ export default function KioskTerminal({
             </span>
           </button>
 
-          {/* Staff Shift Pill */}
           {activeShift ? (
             <div className="d-flex align-items-center gap-2 bg-slate-800 px-3 py-1 rounded-pill border border-secondary border-opacity-50">
               <UserCheck size={14} className="text-success" />
@@ -946,7 +1040,6 @@ export default function KioskTerminal({
       <div className="flex-grow-1 d-flex flex-column flex-lg-row overflow-hidden">
         {/* Left / Center Catalog Panel */}
         <div className="flex-grow-1 d-flex flex-column p-3 overflow-hidden bg-slate-900">
-          {/* Categories & Search */}
           <div className="d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-2 mb-3">
             <div className="d-flex align-items-center gap-1 overflow-x-auto pb-1">
               {categories.map((cat) => (
@@ -975,7 +1068,6 @@ export default function KioskTerminal({
             </div>
           </div>
 
-          {/* Products Grid */}
           <div className="flex-grow-1 overflow-y-auto pe-1">
             <div className="kiosk-grid">
               {filteredProducts.map((p) => {
@@ -1020,7 +1112,6 @@ export default function KioskTerminal({
           className="bg-slate-950 border-start border-secondary border-opacity-25 d-flex flex-column"
           style={{ width: '100%', maxWidth: 390, minWidth: 330 }}
         >
-          {/* Cart Header */}
           <div className="p-3 border-bottom border-secondary border-opacity-25 d-flex align-items-center justify-content-between">
             <div className="d-flex align-items-center gap-2">
               <ShoppingBag size={20} className="text-primary" />
@@ -1033,7 +1124,6 @@ export default function KioskTerminal({
             )}
           </div>
 
-          {/* Dining Option Switcher */}
           <div className="px-3 pt-2">
             <div className="btn-group w-100" role="group">
               <button
@@ -1053,7 +1143,6 @@ export default function KioskTerminal({
             </div>
           </div>
 
-          {/* Cart Items List */}
           <div className="flex-grow-1 p-3 overflow-y-auto">
             {cart.length === 0 ? (
               <div className="text-center py-5 text-muted">
@@ -1095,7 +1184,6 @@ export default function KioskTerminal({
                       </div>
                     </div>
 
-                    {/* Applied Modifiers Pills */}
                     {item.modifiers.length > 0 && (
                       <div className="d-flex flex-wrap gap-1 pt-1 border-top border-secondary border-opacity-25 mt-1">
                         {item.modifiers.map((mod, idx) => (
@@ -1115,7 +1203,6 @@ export default function KioskTerminal({
             )}
           </div>
 
-          {/* Cart Summary & Pay Action */}
           <div className="p-3 bg-slate-900 border-top border-secondary border-opacity-25">
             <div className="d-flex justify-content-between text-muted small mb-1">
               <span>Subtotal</span>
@@ -1607,14 +1694,21 @@ export default function KioskTerminal({
         </div>
       )}
 
-      {/* Modal: Payment Selection & Cash Tender */}
+      {/* Modal: Payment Selection, Cash Tender & Billplz Checkout */}
       {showPayModal && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }} tabIndex={-1}>
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.75)' }} tabIndex={-1}>
           <div className="modal-dialog modal-dialog-centered">
-            <div className="modal-content bg-slate-900 text-white border border-secondary">
+            <div className="modal-content bg-slate-900 text-white border border-secondary shadow-lg">
               <div className="modal-header border-secondary">
                 <h5 className="modal-title fw-bold">Select Payment Method</h5>
-                <button type="button" className="btn-close btn-close-white" onClick={() => setShowPayModal(false)}></button>
+                <button
+                  type="button"
+                  className="btn-close btn-close-white"
+                  onClick={() => {
+                    if (billplzPollingRef.current) clearInterval(billplzPollingRef.current);
+                    setShowPayModal(false);
+                  }}
+                ></button>
               </div>
 
               <div className="modal-body">
@@ -1623,47 +1717,59 @@ export default function KioskTerminal({
                   <h2 className="fw-bold text-info font-monospace">RM {grandTotal.toFixed(2)}</h2>
                 </div>
 
-                {/* Payment Method Switcher */}
+                {/* 4 Payment Method Options */}
                 <div className="row g-2 mb-3">
-                  <div className="col-4">
+                  <div className="col-3">
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('CASH')}
-                      className={`btn w-100 p-3 d-flex flex-column align-items-center gap-1 ${
+                      className={`btn w-100 p-2 d-flex flex-column align-items-center gap-1 ${
                         paymentMethod === 'CASH' ? 'btn-primary' : 'btn-outline-secondary text-white'
                       }`}
                     >
-                      <Banknote size={24} />
-                      <span className="small fw-bold">Cash</span>
+                      <Banknote size={20} />
+                      <span style={{ fontSize: '0.75rem' }} className="fw-bold">Cash</span>
                     </button>
                   </div>
-                  <div className="col-4">
+                  <div className="col-3">
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('CREDIT_CARD')}
-                      className={`btn w-100 p-3 d-flex flex-column align-items-center gap-1 ${
+                      className={`btn w-100 p-2 d-flex flex-column align-items-center gap-1 ${
                         paymentMethod === 'CREDIT_CARD' ? 'btn-primary' : 'btn-outline-secondary text-white'
                       }`}
                     >
-                      <CreditCard size={24} />
-                      <span className="small fw-bold">Card</span>
+                      <CreditCard size={20} />
+                      <span style={{ fontSize: '0.75rem' }} className="fw-bold">Card</span>
                     </button>
                   </div>
-                  <div className="col-4">
+                  <div className="col-3">
                     <button
                       type="button"
                       onClick={() => setPaymentMethod('QR_PAY')}
-                      className={`btn w-100 p-3 d-flex flex-column align-items-center gap-1 ${
+                      className={`btn w-100 p-2 d-flex flex-column align-items-center gap-1 ${
                         paymentMethod === 'QR_PAY' ? 'btn-primary' : 'btn-outline-secondary text-white'
                       }`}
                     >
-                      <QrCode size={24} />
-                      <span className="small fw-bold">DuitNow QR</span>
+                      <QrCode size={20} />
+                      <span style={{ fontSize: '0.75rem' }} className="fw-bold">QR Pay</span>
+                    </button>
+                  </div>
+                  <div className="col-3">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('BILLPLZ')}
+                      className={`btn w-100 p-2 d-flex flex-column align-items-center gap-1 ${
+                        paymentMethod === 'BILLPLZ' ? 'btn-primary' : 'btn-outline-secondary text-white'
+                      }`}
+                    >
+                      <Globe size={20} className="text-info" />
+                      <span style={{ fontSize: '0.75rem' }} className="fw-bold">Billplz</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Cash Quick Tender Buttons */}
+                {/* Cash Tender UI */}
                 {paymentMethod === 'CASH' && (
                   <div className="p-3 bg-slate-950 rounded-3 border border-secondary border-opacity-50 mb-3">
                     <label className="form-label small text-muted">Cash Tendered (RM)</label>
@@ -1699,7 +1805,7 @@ export default function KioskTerminal({
                   </div>
                 )}
 
-                {/* QR Code Scan Mock */}
+                {/* DuitNow Static QR */}
                 {paymentMethod === 'QR_PAY' && (
                   <div className="p-3 bg-white text-dark rounded-3 text-center mb-3">
                     <div className="fw-bold mb-1">Scan DuitNow QR to Pay</div>
@@ -1709,20 +1815,95 @@ export default function KioskTerminal({
                     <div className="small text-muted">Supported: Touch 'n Go, GrabPay, Maybank, CIMB</div>
                   </div>
                 )}
+
+                {/* Billplz Dynamic Gateway UI */}
+                {paymentMethod === 'BILLPLZ' && (
+                  <div className="p-3 bg-slate-950 rounded-3 border border-secondary border-opacity-50 text-center mb-3">
+                    {!billplzState ? (
+                      <div>
+                        <div className="fw-bold text-info mb-1 d-flex align-items-center justify-content-center gap-1">
+                          <ShieldCheck size={16} /> Billplz Online FPX & Dynamic QR
+                        </div>
+                        <p className="text-muted small mb-3">
+                          Generate a dynamic payment bill for customer FPX online banking or e-wallet settlement.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleInitiateBillplz}
+                          disabled={isProcessingOrder}
+                          className="btn btn-info text-dark btn-sm fw-bold px-4 py-2"
+                        >
+                          {isProcessingOrder ? 'Connecting to Billplz...' : 'Generate Dynamic Billplz Checkout'}
+                        </button>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="fw-bold text-success mb-2 d-flex align-items-center justify-content-center gap-1">
+                          <CheckCircle size={16} /> Billplz Bill Generated: {billplzState.billId}
+                        </div>
+
+                        {/* QR Simulation */}
+                        <div className="p-3 bg-white text-dark rounded-3 d-inline-block my-2 shadow-sm">
+                          <QrCode size={110} />
+                          <div className="small fw-bold mt-1 text-primary">Scan to Pay RM {grandTotal.toFixed(2)}</div>
+                        </div>
+
+                        <div className="d-flex justify-content-center gap-2 my-2">
+                          {billplzState.billUrl && (
+                            <a
+                              href={billplzState.billUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn btn-xs btn-outline-info text-info d-flex align-items-center gap-1"
+                            >
+                              <ExternalLink size={12} /> Open Gateway URL
+                            </a>
+                          )}
+                        </div>
+
+                        <div className="text-warning small d-flex align-items-center justify-content-center gap-1 my-2">
+                          <RotateCw size={13} className="animate-spin" />
+                          <span>Waiting for customer payment confirmation...</span>
+                        </div>
+
+                        {/* Sandbox Simulation Tool */}
+                        <div className="pt-2 border-top border-secondary border-opacity-50 mt-2">
+                          <button
+                            type="button"
+                            onClick={handleSimulateBillplzPayment}
+                            className="btn btn-xs btn-success fw-bold px-3 py-1"
+                            title="Simulate successful bank payment for demo"
+                          >
+                            Simulate Customer Bank Payment (Instant)
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="modal-footer border-secondary">
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowPayModal(false)}>
-                  Cancel
-                </button>
                 <button
                   type="button"
-                  onClick={handleCompleteOrder}
-                  disabled={isProcessingOrder || (paymentMethod === 'CASH' && cashTendered < grandTotal)}
-                  className="btn btn-success btn-sm px-4 fw-bold"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    if (billplzPollingRef.current) clearInterval(billplzPollingRef.current);
+                    setShowPayModal(false);
+                  }}
                 >
-                  {isProcessingOrder ? 'Processing & Deducting BOM...' : 'Confirm & Complete Order'}
+                  Cancel
                 </button>
+                {paymentMethod !== 'BILLPLZ' && (
+                  <button
+                    type="button"
+                    onClick={handleCompleteOrder}
+                    disabled={isProcessingOrder || (paymentMethod === 'CASH' && cashTendered < grandTotal)}
+                    className="btn btn-success btn-sm px-4 fw-bold"
+                  >
+                    {isProcessingOrder ? 'Processing & Deducting BOM...' : 'Confirm & Complete Order'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1743,7 +1924,6 @@ export default function KioskTerminal({
               </div>
 
               <div className="modal-body p-4 font-monospace">
-                {/* Offline Warning Notice if buffered */}
                 {lastOrder.is_offline && (
                   <div className="alert alert-warning p-2 small mb-3 border-0 d-flex align-items-center gap-2">
                     <HardDrive size={16} />
@@ -1751,7 +1931,6 @@ export default function KioskTerminal({
                   </div>
                 )}
 
-                {/* Thermal Receipt Simulation */}
                 <div className="p-3 bg-light border rounded text-center small mb-3">
                   <h5 className="fw-bold mb-0 text-dark">{company?.name || 'MULTI-KIOSK'}</h5>
                   <div className="text-muted" style={{ fontSize: '0.75rem' }}>{lastOrder.branch_name}</div>
@@ -1800,13 +1979,12 @@ export default function KioskTerminal({
                   )}
                 </div>
 
-                {/* Automated BOM Stock Deduction Audit Alert */}
                 <div className="p-2 rounded bg-info bg-opacity-10 border border-info border-opacity-25 small text-info text-start">
                   <div className="d-flex align-items-center gap-1 fw-bold">
                     <Layers size={14} /> Recipe & Modifier BOM Deductions Recorded
                   </div>
                   <div style={{ fontSize: '0.75rem' }}>
-                    Base ingredients and add-on recipes automatically deducted from stockroom. Material cost snapshot: RM {lastOrder.total_material_cost?.toFixed(2) || '0.00'}.
+                    Base ingredients and add-on recipes automatically deducted from stockroom.
                   </div>
                 </div>
               </div>
@@ -1865,7 +2043,6 @@ export default function KioskTerminal({
               </div>
 
               <div className="modal-body p-3">
-                {/* Connection Status Card */}
                 <div className={`p-3 rounded-3 border mb-3 ${isPrinterConnected ? 'bg-success bg-opacity-10 border-success' : 'bg-slate-950 border-secondary'}`}>
                   <div className="d-flex align-items-center justify-content-between">
                     <div>
@@ -1892,7 +2069,6 @@ export default function KioskTerminal({
                   </div>
                 )}
 
-                {/* Configuration Options */}
                 <div className="row g-2 mb-3">
                   <div className="col-6">
                     <label className="form-label small text-muted">Paper Width</label>
@@ -1949,7 +2125,6 @@ export default function KioskTerminal({
                   </div>
                 </div>
 
-                {/* Diagnostics */}
                 <div className="d-flex gap-2">
                   <button
                     type="button"
@@ -1994,21 +2169,18 @@ export default function KioskTerminal({
               <div className="modal-body p-3 text-center">
                 <div className="text-muted small mb-2">Enter your 4-6 digit Staff PIN:</div>
 
-                {/* PIN Display */}
                 <div className="p-3 bg-slate-950 rounded-3 border border-secondary mb-3">
                   <div className="font-monospace fs-3 letter-spacing-2 text-info">
                     {pinInput ? '•'.repeat(pinInput.length) : <span className="text-muted opacity-50">_ _ _ _</span>}
                   </div>
                 </div>
 
-                {/* Notifications */}
                 {pinMessage && (
                   <div className={`alert ${pinMessage.type === 'success' ? 'alert-success' : 'alert-danger'} p-2 small mb-3 border-0`}>
                     {pinMessage.text}
                   </div>
                 )}
 
-                {/* Numeric Keypad */}
                 <div className="d-grid gap-2" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
                   {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0', '⌫'].map((k) => (
                     <button
@@ -2026,7 +2198,6 @@ export default function KioskTerminal({
                   ))}
                 </div>
 
-                {/* Clock Actions */}
                 <div className="d-flex gap-2 mt-3">
                   <button
                     type="button"

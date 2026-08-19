@@ -11,6 +11,7 @@ import {
   CircleDollarSign,
   Banknote,
   UtensilsCrossed,
+  CreditCard,
   Settings,
   Sliders,
   MonitorPlay,
@@ -44,6 +45,7 @@ export default function AdminLayout({ children, title }: AdminLayoutProps) {
     { label: 'Staff Management', href: '/staff', icon: Users, pattern: /^\/staff/ },
     { label: 'Attendance & Clocking', href: '/attendance', icon: Clock, pattern: /^\/attendance/ },
     { label: 'Hourly Wage & Labor', href: '/payroll', icon: CircleDollarSign, pattern: /^\/payroll/ },
+    { label: 'Payment Gateways (Billplz)', href: '/settings/payment-gateways', icon: CreditCard, pattern: /^\/settings\/payment-gateways/ },
     { label: 'Branding & Identity', href: '/settings/branding', icon: Settings, pattern: /^\/settings\/branding/ },
   ];
 

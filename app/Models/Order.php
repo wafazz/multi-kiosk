@@ -26,11 +26,15 @@ class Order extends Model
         'net_amount',
         'total_material_cost',
         'payment_method',
+        'billplz_bill_id',
+        'billplz_url',
+        'payment_gateway_reference',
         'payment_status',
         'order_status',
         'fulfillment_status',
         'dining_option',
         'ordered_at',
+        'paid_at',
         'preparation_started_at',
         'ready_at',
         'completed_at',
@@ -38,6 +42,7 @@ class Order extends Model
 
     protected $casts = [
         'ordered_at' => 'datetime',
+        'paid_at' => 'datetime',
         'preparation_started_at' => 'datetime',
         'ready_at' => 'datetime',
         'completed_at' => 'datetime',
