@@ -17,6 +17,7 @@ class Order extends Model
         'company_id',
         'branch_id',
         'kiosk_id',
+        'kiosk_shift_id',
         'staff_id',
         'order_number',
         'total_amount',
@@ -62,6 +63,11 @@ class Order extends Model
     public function kiosk(): BelongsTo
     {
         return $this->belongsTo(Kiosk::class);
+    }
+
+    public function shift(): BelongsTo
+    {
+        return $this->belongsTo(KioskShift::class, 'kiosk_shift_id');
     }
 
     public function staff(): BelongsTo

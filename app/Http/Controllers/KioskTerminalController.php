@@ -74,7 +74,7 @@ class KioskTerminalController extends Controller
                 ];
             });
 
-        // Active open shifts at this kiosk
+        // Active open staff attendance shifts at this kiosk
         $activeShift = null;
         if ($selectedKiosk) {
             $openAttendance = Attendance::with('staff')
@@ -94,12 +94,33 @@ class KioskTerminalController extends Controller
             }
         }
 
+        // Active open cash till shift at this kiosk
+        $activeTillShift = null;
+        if ($selectedKiosk) {
+            $openTill = \App\Models\KioskShift::with('openedByStaff')
+                ->where('kiosk_id', $selectedKiosk->id)
+                ->where('status', 'OPEN')
+                ->latest('opened_at')
+                ->first();
+
+            if ($openTill) {
+                $activeTillShift = [
+                    'id' => $openTill->id,
+                    'opened_at' => $openTill->opened_at->format('Y-m-d H:i:s'),
+                    'opening_float' => (float)$openTill->opening_cash_float,
+                    'staff_name' => $openTill->openedByStaff->full_name ?? 'Staff',
+                    'staff_code' => $openTill->openedByStaff->staff_code ?? '',
+                ];
+            }
+        }
+
         return Inertia::render('Kiosk/Terminal', [
             'company' => $company,
             'kiosks' => $allKiosks,
             'currentKiosk' => $selectedKiosk,
             'products' => $products,
             'activeShift' => $activeShift,
+            'activeTillShift' => $activeTillShift,
         ]);
     }
 
@@ -124,6 +145,12 @@ class KioskTerminalController extends Controller
         $kiosk = Kiosk::with('branch')->findOrFail($validated['kiosk_id']);
         $branch = $kiosk->branch;
 
+        // Check for active till shift
+        $activeTill = \App\Models\KioskShift::where('kiosk_id', $kiosk->id)
+            ->where('status', 'OPEN')
+            ->latest('opened_at')
+            ->first();
+
         $orderNumber = 'ORD-' . $kiosk->kiosk_code . '-' . date('Ymd') . '-' . strtoupper(Str::random(4));
 
         $totalAmount = 0.0;
@@ -141,6 +168,7 @@ class KioskTerminalController extends Controller
             'company_id' => $company->id ?? 1,
             'branch_id' => $branch->id,
             'kiosk_id' => $kiosk->id,
+            'kiosk_shift_id' => $activeTill?->id,
             'staff_id' => $validated['staff_id'] ?? null,
             'order_number' => $orderNumber,
             'total_amount' => $totalAmount,

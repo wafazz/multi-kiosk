@@ -25,7 +25,10 @@ import {
   Check,
   Zap,
   Cable,
-  Settings
+  Settings,
+  FileText,
+  DollarSign,
+  AlertTriangle
 } from 'lucide-react';
 import { EscPosBuilder, WebSerialPrinter, ReceiptData } from '../../Utils/escpos';
 
@@ -101,6 +104,13 @@ interface Props {
     staff_code: string;
     clock_in_at: string;
   } | null;
+  activeTillShift?: {
+    id: number;
+    opened_at: string;
+    opening_float: number;
+    staff_name: string;
+    staff_code: string;
+  } | null;
 }
 
 export default function KioskTerminal({
@@ -109,6 +119,7 @@ export default function KioskTerminal({
   currentKiosk,
   products,
   activeShift,
+  activeTillShift,
 }: Props) {
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -125,6 +136,21 @@ export default function KioskTerminal({
   const [showReceiptModal, setShowReceiptModal] = useState<boolean>(false);
   const [showClockModal, setShowClockModal] = useState<boolean>(false);
   const [showPrinterModal, setShowPrinterModal] = useState<boolean>(false);
+
+  // Shift Management Modals
+  const [showOpenShiftModal, setShowOpenShiftModal] = useState<boolean>(false);
+  const [showCloseShiftModal, setShowCloseShiftModal] = useState<boolean>(false);
+  const [showXReportModal, setShowXReportModal] = useState<boolean>(false);
+  const [showZReportResultModal, setShowZReportResultModal] = useState<boolean>(false);
+
+  // Shift Inputs
+  const [openFloatInput, setOpenFloatInput] = useState<string>('200.00');
+  const [closingCashInput, setClosingCashInput] = useState<string>('');
+  const [shiftPinInput, setShiftPinInput] = useState<string>('');
+  const [shiftErrorMessage, setShiftErrorMessage] = useState<string>('');
+  const [isProcessingShift, setIsProcessingShift] = useState<boolean>(false);
+  const [liveXReportData, setLiveXReportData] = useState<any>(null);
+  const [completedZReportData, setCompletedZReportData] = useState<any>(null);
 
   // Hardware Printer state
   const serialPrinter = useRef<WebSerialPrinter>(new WebSerialPrinter());
@@ -217,7 +243,6 @@ export default function KioskTerminal({
         await serialPrinter.current.print(bytes);
         setPrinterStatusMessage('Test receipt sent to ESC/POS thermal printer.');
       } else {
-        // Fallback simulate or attempt connection
         await handleConnectPrinter();
         await serialPrinter.current.print(bytes);
       }
@@ -241,6 +266,84 @@ export default function KioskTerminal({
     }
   };
 
+  // --- SHIFT MANAGEMENT ACTIONS ---
+  const handleOpenShiftSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setShiftErrorMessage('');
+    setIsProcessingShift(true);
+
+    try {
+      const res = await axios.post('/api/v1/kiosk/shift/open', {
+        kiosk_id: currentKiosk.id,
+        pin: shiftPinInput,
+        opening_float: parseFloat(openFloatInput) || 0,
+      });
+
+      if (res.data.success) {
+        setShowOpenShiftModal(false);
+        setShiftPinInput('');
+        router.reload();
+      }
+    } catch (err: any) {
+      setShiftErrorMessage(err.response?.data?.message || 'Failed to open shift. Check PIN.');
+    } finally {
+      setIsProcessingShift(false);
+    }
+  };
+
+  const handleFetchXReport = async () => {
+    try {
+      const res = await axios.get('/api/v1/kiosk/shift/x-report', {
+        params: { kiosk_id: currentKiosk.id },
+      });
+
+      if (res.data.success) {
+        setLiveXReportData(res.data.data);
+        setShowXReportModal(true);
+
+        // Optional auto thermal print of X-Report
+        if (isPrinterConnected) {
+          const xBytes = EscPosBuilder.buildZReport(res.data.data, true, printerConfig.paperWidth);
+          await serialPrinter.current.print(xBytes);
+        }
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Could not fetch X-Report.');
+    }
+  };
+
+  const handleCloseShiftSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setShiftErrorMessage('');
+    setIsProcessingShift(true);
+
+    try {
+      const res = await axios.post('/api/v1/kiosk/shift/close', {
+        kiosk_id: currentKiosk.id,
+        pin: shiftPinInput,
+        closing_cash_counted: parseFloat(closingCashInput) || 0,
+      });
+
+      if (res.data.success) {
+        setCompletedZReportData(res.data.z_report);
+        setShowCloseShiftModal(false);
+        setShowZReportResultModal(true);
+        setShiftPinInput('');
+        setClosingCashInput('');
+
+        // Automatically print official Z-Report and kick drawer
+        if (isPrinterConnected) {
+          const zBytes = EscPosBuilder.buildZReport(res.data.z_report, false, printerConfig.paperWidth);
+          await serialPrinter.current.print(zBytes);
+        }
+      }
+    } catch (err: any) {
+      setShiftErrorMessage(err.response?.data?.message || 'Failed to close shift. Check PIN.');
+    } finally {
+      setIsProcessingShift(false);
+    }
+  };
+
   // Filter products
   const categories = ['ALL', ...Array.from(new Set(products.map((p) => p.category)))];
 
@@ -250,7 +353,7 @@ export default function KioskTerminal({
     return matchesCategory && matchesSearch;
   });
 
-  // Handle Product Click (Customize or Direct Add)
+  // Handle Product Click
   const handleProductClick = (product: Product) => {
     if (product.modifier_groups && product.modifier_groups.length > 0) {
       setCustomizingProduct(product);
@@ -590,10 +693,50 @@ export default function KioskTerminal({
           </div>
         </div>
 
-        {/* Middle Clock */}
-        <div className="d-none d-md-flex align-items-center gap-2 font-monospace text-light fw-bold">
-          <Clock size={16} className="text-primary" />
-          <span>{currentTime}</span>
+        {/* Middle: Shift Till Status & Mid-Shift X-Report */}
+        <div className="d-flex align-items-center gap-2">
+          {activeTillShift ? (
+            <div className="d-flex align-items-center gap-2 bg-slate-800 px-3 py-1 rounded-pill border border-success border-opacity-50">
+              <span className="badge bg-success p-1 rounded-circle" style={{ width: 8, height: 8 }}></span>
+              <div className="text-white small lh-1">
+                <span className="fw-bold font-monospace">Till #{activeTillShift.id}</span>
+                <span className="text-success font-monospace ms-1 small">(Float: RM {activeTillShift.opening_float.toFixed(2)})</span>
+              </div>
+              <button
+                onClick={handleFetchXReport}
+                className="btn btn-xs btn-outline-info text-info border-0 p-0 ms-1"
+                title="View live mid-shift X-Report telemetry"
+              >
+                <FileText size={13} />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                setShiftErrorMessage('');
+                setShiftPinInput('');
+                setShowOpenShiftModal(true);
+              }}
+              className="btn btn-sm btn-warning text-dark fw-bold rounded-pill px-3 d-flex align-items-center gap-1 shadow-sm"
+            >
+              <Banknote size={14} /> <span>Open Till Shift</span>
+            </button>
+          )}
+
+          {activeTillShift && (
+            <button
+              onClick={() => {
+                setShiftErrorMessage('');
+                setShiftPinInput('');
+                setClosingCashInput('');
+                setShowCloseShiftModal(true);
+              }}
+              className="btn btn-sm btn-outline-danger rounded-pill px-2 d-flex align-items-center gap-1"
+              title="Close shift with blind cash count & generate Z-Report"
+            >
+              <DollarSign size={13} /> <span>End Shift (Z-Report)</span>
+            </button>
+          )}
         </div>
 
         {/* Right Hardware Actions & Staff */}
@@ -904,6 +1047,327 @@ export default function KioskTerminal({
                   className="btn btn-primary btn-sm px-4 fw-bold"
                 >
                   Add to Order
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Open Cash Till Shift */}
+      {showOpenShiftModal && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }} tabIndex={-1}>
+          <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 380 }}>
+            <div className="modal-content bg-slate-900 text-white border border-secondary shadow-lg">
+              <div className="modal-header border-secondary">
+                <h5 className="modal-title fw-bold d-flex align-items-center gap-2">
+                  <Banknote size={18} className="text-warning" />
+                  Open Kiosk Cash Till Shift
+                </h5>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowOpenShiftModal(false)}></button>
+              </div>
+
+              <form onSubmit={handleOpenShiftSubmit}>
+                <div className="modal-body p-3">
+                  <div className="text-muted small mb-3">
+                    Enter the starting cash float amount in the physical drawer and verify your staff PIN.
+                  </div>
+
+                  {shiftErrorMessage && (
+                    <div className="alert alert-danger p-2 small mb-3 border-0">
+                      {shiftErrorMessage}
+                    </div>
+                  )}
+
+                  <div className="mb-3">
+                    <label className="form-label small text-muted">Starting Cash Float (RM) *</label>
+                    <div className="input-group">
+                      <span className="input-group-text bg-dark text-white border-secondary font-monospace">RM</span>
+                      <input
+                        type="number"
+                        step="10.00"
+                        min="0"
+                        className="form-control bg-dark text-white border-secondary font-monospace fs-5"
+                        value={openFloatInput}
+                        onChange={(e) => setOpenFloatInput(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label small text-muted">Staff Authorizing PIN *</label>
+                    <input
+                      type="password"
+                      className="form-control bg-dark text-white border-secondary font-monospace fs-5"
+                      placeholder="••••"
+                      value={shiftPinInput}
+                      onChange={(e) => setShiftPinInput(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="modal-footer border-secondary">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowOpenShiftModal(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" disabled={isProcessingShift} className="btn btn-warning text-dark btn-sm px-4 fw-bold">
+                    {isProcessingShift ? 'Opening...' : 'Open Till Shift'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: End Shift & Blind Cash Count (Z-Report) */}
+      {showCloseShiftModal && activeTillShift && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.85)' }} tabIndex={-1}>
+          <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 400 }}>
+            <div className="modal-content bg-slate-900 text-white border border-secondary shadow-lg">
+              <div className="modal-header border-secondary">
+                <h5 className="modal-title fw-bold d-flex align-items-center gap-2 text-danger">
+                  <DollarSign size={18} />
+                  End Shift & Blind Cash Count (Z-Report)
+                </h5>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowCloseShiftModal(false)}></button>
+              </div>
+
+              <form onSubmit={handleCloseShiftSubmit}>
+                <div className="modal-body p-3">
+                  <div className="p-2 bg-slate-950 rounded-3 border border-secondary border-opacity-50 mb-3 small">
+                    <div className="fw-bold text-white">Till #{activeTillShift.id}</div>
+                    <div className="text-muted">Opened at: {activeTillShift.opened_at}</div>
+                    <div className="text-muted">Starting Float: <span className="text-info font-monospace">RM {activeTillShift.opening_float.toFixed(2)}</span></div>
+                  </div>
+
+                  <div className="text-warning small mb-3">
+                    <AlertTriangle size={14} className="d-inline me-1" />
+                    <strong>Blind Count Policy:</strong> Count all physical notes & coins in the cash drawer and enter the total below. The system will calculate and log the variance.
+                  </div>
+
+                  {shiftErrorMessage && (
+                    <div className="alert alert-danger p-2 small mb-3 border-0">
+                      {shiftErrorMessage}
+                    </div>
+                  )}
+
+                  <div className="mb-3">
+                    <label className="form-label small text-muted">Physical Counted Cash in Till (RM) *</label>
+                    <div className="input-group">
+                      <span className="input-group-text bg-dark text-white border-secondary font-monospace">RM</span>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        className="form-control bg-dark text-white border-secondary font-monospace fs-4"
+                        placeholder="0.00"
+                        value={closingCashInput}
+                        onChange={(e) => setClosingCashInput(e.target.value)}
+                        required
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label small text-muted">Cashier / Manager Staff PIN *</label>
+                    <input
+                      type="password"
+                      className="form-control bg-dark text-white border-secondary font-monospace fs-5"
+                      placeholder="••••"
+                      value={shiftPinInput}
+                      onChange={(e) => setShiftPinInput(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="modal-footer border-secondary">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowCloseShiftModal(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" disabled={isProcessingShift || !closingCashInput} className="btn btn-danger btn-sm px-4 fw-bold">
+                    {isProcessingShift ? 'Reconciling...' : 'Confirm Blind Count & Close Till'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Live Mid-Shift X-Report */}
+      {showXReportModal && liveXReportData && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }} tabIndex={-1}>
+          <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 420 }}>
+            <div className="modal-content border-0 shadow">
+              <div className="modal-header bg-info text-white">
+                <h5 className="modal-title fw-bold d-flex align-items-center gap-2 small">
+                  <FileText size={16} /> Mid-Shift X-Report (Live Telemetry)
+                </h5>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowXReportModal(false)}></button>
+              </div>
+
+              <div className="modal-body p-3 font-monospace small bg-light">
+                <div className="p-3 bg-white border rounded text-center">
+                  <h6 className="fw-bold text-dark mb-0">{company?.name || 'MULTI-KIOSK'}</h6>
+                  <div className="text-muted small">{liveXReportData.branch_name}</div>
+                  <div className="text-muted small">Kiosk: {liveXReportData.kiosk_code} ({liveXReportData.kiosk_name})</div>
+                  <div className="border-bottom my-2"></div>
+                  <div className="fw-bold text-info">*** MID-SHIFT X-REPORT ***</div>
+                  <div className="text-muted" style={{ fontSize: '0.7rem' }}>Opened: {liveXReportData.opened_at}</div>
+                  <div className="text-muted" style={{ fontSize: '0.7rem' }}>Cashier: {liveXReportData.cashier_name}</div>
+                  <div className="border-bottom my-2"></div>
+
+                  <div className="text-start">
+                    <div className="d-flex justify-content-between">
+                      <span>Total Completed Orders:</span>
+                      <span>{liveXReportData.total_orders_count}</span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span>Gross Sales Revenue:</span>
+                      <span>RM {liveXReportData.gross_sales.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between text-success">
+                      <span>Cash Sales:</span>
+                      <span>RM {liveXReportData.cash_sales.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span>Card Sales:</span>
+                      <span>RM {liveXReportData.card_sales.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span>DuitNow QR Sales:</span>
+                      <span>RM {liveXReportData.qr_sales.toFixed(2)}</span>
+                    </div>
+
+                    <div className="border-bottom my-2"></div>
+
+                    <div className="d-flex justify-content-between">
+                      <span>Starting Cash Float:</span>
+                      <span>RM {liveXReportData.opening_cash_float.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between fw-bold text-dark fs-6 mt-1">
+                      <span>Expected Till Cash:</span>
+                      <span>RM {liveXReportData.expected_cash_in_till.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowXReportModal(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Official Closed Z-Report Result */}
+      {showZReportResultModal && completedZReportData && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.85)' }} tabIndex={-1}>
+          <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 440 }}>
+            <div className="modal-content border-0 shadow">
+              <div className="modal-header bg-dark text-white">
+                <h5 className="modal-title fw-bold d-flex align-items-center gap-2 small text-success">
+                  <CheckCircle size={16} /> Shift #{completedZReportData.shift_id} Closed — Official Z-Report
+                </h5>
+                <button
+                  type="button"
+                  className="btn-close btn-close-white"
+                  onClick={() => {
+                    setShowZReportResultModal(false);
+                    router.reload();
+                  }}
+                ></button>
+              </div>
+
+              <div className="modal-body p-3 font-monospace small bg-light">
+                <div className="p-3 bg-white border rounded text-center">
+                  <h6 className="fw-bold text-dark mb-0">{company?.name || 'MULTI-KIOSK'}</h6>
+                  <div className="text-muted small">{completedZReportData.branch_name}</div>
+                  <div className="text-muted small">Kiosk: {completedZReportData.kiosk_code} ({completedZReportData.kiosk_name})</div>
+                  <div className="border-bottom my-2"></div>
+                  <div className="fw-bold text-dark">*** OFFICIAL Z-REPORT ***</div>
+                  <div className="text-muted" style={{ fontSize: '0.7rem' }}>Opened: {completedZReportData.opened_at}</div>
+                  <div className="text-muted" style={{ fontSize: '0.7rem' }}>Closed: {completedZReportData.closed_at}</div>
+                  <div className="text-muted" style={{ fontSize: '0.7rem' }}>Closed By: {completedZReportData.closed_by}</div>
+                  <div className="border-bottom my-2"></div>
+
+                  <div className="text-start">
+                    <div className="d-flex justify-content-between">
+                      <span>Total Completed Orders:</span>
+                      <span>{completedZReportData.orders_count}</span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span>Gross Sales:</span>
+                      <span>RM {completedZReportData.gross_sales.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between text-success">
+                      <span>Cash Sales:</span>
+                      <span>RM {completedZReportData.cash_sales.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span>Card Sales:</span>
+                      <span>RM {completedZReportData.card_sales.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span>QR Sales:</span>
+                      <span>RM {completedZReportData.qr_sales.toFixed(2)}</span>
+                    </div>
+
+                    <div className="border-bottom my-2"></div>
+
+                    <div className="d-flex justify-content-between">
+                      <span>Starting Float:</span>
+                      <span>RM {completedZReportData.opening_float.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span>Expected Till Cash:</span>
+                      <span>RM {completedZReportData.expected_cash.toFixed(2)}</span>
+                    </div>
+                    <div className="d-flex justify-content-between fw-bold text-primary">
+                      <span>Physical Counted Cash:</span>
+                      <span>RM {completedZReportData.closing_counted.toFixed(2)}</span>
+                    </div>
+
+                    <div className="border-top my-2"></div>
+
+                    <div className="d-flex justify-content-between fw-bold fs-6">
+                      <span>CASH VARIANCE:</span>
+                      <span
+                        className={
+                          completedZReportData.cash_variance < 0
+                            ? 'text-danger'
+                            : completedZReportData.cash_variance > 0
+                            ? 'text-warning'
+                            : 'text-success'
+                        }
+                      >
+                        {completedZReportData.cash_variance >= 0
+                          ? `+RM ${completedZReportData.cash_variance.toFixed(2)}`
+                          : `-RM ${Math.abs(completedZReportData.cash_variance).toFixed(2)}`}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm px-4"
+                  onClick={() => {
+                    setShowZReportResultModal(false);
+                    router.reload();
+                  }}
+                >
+                  Done
                 </button>
               </div>
             </div>

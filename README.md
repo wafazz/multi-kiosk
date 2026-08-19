@@ -102,6 +102,11 @@
 - **Automated RJ11 Cash Drawer Kick:** Sends hardware electrical pulses (`ESC p 0 25 250`) to pop open the physical cash till automatically upon cash checkout.
 - Configurable baud rates (9600 to 115200), auto-print toggles, and hardware test diagnostics stored in kiosk device local storage.
 
+### 9. 💵 Shift Management & Cash Float Reconciliation (X & Z-Reports)
+- **Opening Cash Till Float:** Staff unlock the POS terminal by entering the starting till float (e.g. `RM 200.00`) verified via PIN.
+- **Mid-Shift X-Reports:** On-demand live sales telemetry by tender without closing the drawer.
+- **Blind End-of-Shift Cash Count (Z-Report):** Cashiers count physical notes/coins without seeing system totals. The system automatically computes and logs cash variances (*Over / Short / Match*), freezes the shift financial ledger, and prints an official thermal **Z-Report** with verification signature lines.
+
 ---
 
 ## 🛠️ Architecture & Technology Stack
@@ -295,16 +300,19 @@ php artisan test
   ✓ kiosk order processes and deducts bom stock ................... 0.12s  
 
    PASS  Tests\Feature\ModifierAndBOMDeductionTest
-  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.09s  
+  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.07s  
+
+   PASS  Tests\Feature\ShiftManagementAndZReportTest
+  ✓ shift lifecycle with opening float and z report variance ..... 0.03s  
 
    PASS  Tests\Feature\StaffAttendanceAndClockingTest
-  ✓ staff can clock in and clock out at kiosk with pin ............ 0.08s  
+  ✓ staff can clock in and clock out at kiosk with pin ............ 0.06s  
 
    PASS  Tests\Feature\StockTransferLifecycleTest
-  ✓ stock transfer lifecycle moves inventory atomically .......... 0.05s  
+  ✓ stock transfer lifecycle moves inventory atomically .......... 0.03s  
 
-  Tests:    9 passed (35 assertions)
-  Duration: 1.77s
+  Tests:    10 passed (46 assertions)
+  Duration: 1.13s
 ```
 
 ---

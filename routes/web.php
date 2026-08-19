@@ -77,6 +77,12 @@ Route::get('/payroll', [PayrollReportController::class, 'index'])->name('payroll
 Route::get('/settings/branding', [BrandingController::class, 'index'])->name('settings.branding');
 Route::post('/settings/branding', [BrandingController::class, 'update'])->name('settings.branding.update');
 
+// Shift Management & Cash Float (Z-Reports)
+Route::get('/shifts', [\App\Http\Controllers\ShiftController::class, 'index'])->name('shifts.index');
+Route::post('/api/v1/kiosk/shift/open', [\App\Http\Controllers\ShiftController::class, 'apiOpenShift'])->name('api.kiosk.shift.open');
+Route::get('/api/v1/kiosk/shift/x-report', [\App\Http\Controllers\ShiftController::class, 'apiLiveXReport'])->name('api.kiosk.shift.xreport');
+Route::post('/api/v1/kiosk/shift/close', [\App\Http\Controllers\ShiftController::class, 'apiCloseShift'])->name('api.kiosk.shift.close');
+
 // Kiosk Dedicated Terminal UI
 Route::get('/kiosk/terminal/{kioskId?}', [KioskTerminalController::class, 'terminal'])->name('kiosk.terminal');
 Route::post('/api/v1/kiosk/order', [KioskTerminalController::class, 'processOrder'])->name('api.kiosk.order');

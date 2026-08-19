@@ -7,6 +7,7 @@ use App\Models\Branch;
 use App\Models\Company;
 use App\Models\InventoryBalance;
 use App\Models\Kiosk;
+use App\Models\KioskShift;
 use App\Models\ModifierGroup;
 use App\Models\ModifierOption;
 use App\Models\ModifierOptionRecipe;
@@ -587,6 +588,64 @@ class DatabaseSeeder extends Seeder
             'status' => 'OPEN',
         ]);
 
+        // 8.5 Seed Kiosk Cash Till Shifts (Z-Reports & Active Float)
+        // Yesterday's Closed Shift at Pavilion Kiosk 1 (With perfect 0.00 cash reconciliation)
+        KioskShift::create([
+            'company_id' => $company->id,
+            'branch_id' => $branchPavilion->id,
+            'kiosk_id' => $kioskPav1->id,
+            'opened_by_staff_id' => $staffBarista1->id,
+            'closed_by_staff_id' => $staffMgrPav->id,
+            'opened_at' => Carbon::now()->subDay()->setTime(9, 0),
+            'closed_at' => Carbon::now()->subDay()->setTime(17, 0),
+            'opening_cash_float' => 200.00,
+            'closing_cash_counted' => 518.00,
+            'expected_cash_total' => 518.00,
+            'cash_variance' => 0.00,
+            'total_sales_gross' => 636.00,
+            'total_tax_collected' => 38.16,
+            'total_cash_sales' => 318.00,
+            'total_card_sales' => 318.00,
+            'total_qr_sales' => 0.00,
+            'total_orders_count' => 12,
+            'status' => 'CLOSED',
+            'closing_notes' => 'Evening shift closed. Till balanced perfectly.',
+        ]);
+
+        // Yesterday's Closed Shift at Mid Valley Kiosk 1 (With RM 5.00 cash shortage variance)
+        KioskShift::create([
+            'company_id' => $company->id,
+            'branch_id' => $branchMidValley->id,
+            'kiosk_id' => $kioskMv1->id,
+            'opened_by_staff_id' => $staffBarista3->id,
+            'closed_by_staff_id' => $staffBarista3->id,
+            'opened_at' => Carbon::now()->subDay()->setTime(10, 0),
+            'closed_at' => Carbon::now()->subDay()->setTime(18, 0),
+            'opening_cash_float' => 200.00,
+            'closing_cash_counted' => 395.00,
+            'expected_cash_total' => 400.00,
+            'cash_variance' => -5.00, // RM 5 shortage
+            'total_sales_gross' => 400.00,
+            'total_tax_collected' => 24.00,
+            'total_cash_sales' => 200.00,
+            'total_card_sales' => 200.00,
+            'total_qr_sales' => 0.00,
+            'total_orders_count' => 8,
+            'status' => 'CLOSED',
+            'closing_notes' => 'RM 5 shortage investigated (coin change rounding difference).',
+        ]);
+
+        // Today's Live Active Shift at Pavilion Kiosk 1
+        $activeShiftPav1 = KioskShift::create([
+            'company_id' => $company->id,
+            'branch_id' => $branchPavilion->id,
+            'kiosk_id' => $kioskPav1->id,
+            'opened_by_staff_id' => $staffBarista1->id,
+            'opened_at' => Carbon::now()->setTime(8, 30),
+            'opening_cash_float' => 200.00,
+            'status' => 'OPEN',
+        ]);
+
         // 9. Historical Orders with Recipe BOM deduction records
         for ($i = 1; $i <= 12; $i++) {
             $orderNum = 'ORD-PV01-' . date('Ymd') . '-' . str_pad($i, 4, '0', STR_PAD_LEFT);
@@ -597,6 +656,7 @@ class DatabaseSeeder extends Seeder
                 'company_id' => $company->id,
                 'branch_id' => $branchPavilion->id,
                 'kiosk_id' => $kioskPav1->id,
+                'kiosk_shift_id' => $activeShiftPav1->id,
                 'staff_id' => $staffBarista1->id,
                 'order_number' => $orderNum,
                 'total_amount' => 26.50,

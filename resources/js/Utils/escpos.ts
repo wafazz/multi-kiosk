@@ -222,6 +222,78 @@ export class EscPosBuilder {
 
     return builder.getBytes();
   }
+
+  /**
+   * Build Official Shift Z-Report / X-Report thermal receipt payload
+   */
+  public static buildZReport(shiftData: any, isXReport: boolean = false, paperWidth: '58mm' | '80mm' = '58mm'): Uint8Array {
+    const builder = new EscPosBuilder(paperWidth);
+
+    // Kick cash drawer for counting
+    builder.kickDrawer(2);
+
+    const reportTitle = isXReport ? '*** X-REPORT (MID-SHIFT) ***' : '*** OFFICIAL Z-REPORT ***';
+
+    builder
+      .align('CENTER')
+      .bold(true)
+      .textDouble(true)
+      .textLine(shiftData.company_name ? shiftData.company_name.toUpperCase() : 'MULTI-KIOSK')
+      .textDouble(false)
+      .textLine(reportTitle)
+      .bold(false)
+      .textLine(shiftData.branch_name || 'Branch')
+      .textLine(`Kiosk: ${shiftData.kiosk_code || 'K01'} (${shiftData.kiosk_name || 'Terminal'})`)
+      .divider('=')
+      .align('LEFT')
+      .row2('Shift #:', `${shiftData.shift_id || 'N/A'}`)
+      .row2('Opened At:', `${shiftData.opened_at || 'N/A'}`)
+      .row2('Closed At:', `${shiftData.closed_at || (isXReport ? 'IN PROGRESS' : 'N/A')}`)
+      .row2('Opened By:', `${shiftData.opened_by || shiftData.cashier_name || 'Staff'}`)
+      .row2('Closed By:', `${shiftData.closed_by || (isXReport ? 'N/A' : 'Staff')}`)
+      .divider('-')
+      .bold(true)
+      .textLine('SALES BREAKDOWN BY TENDER')
+      .bold(false)
+      .row2('Total Orders Count:', `${shiftData.orders_count || shiftData.total_orders_count || 0}`)
+      .row2('Gross Sales Revenue:', `RM ${(shiftData.gross_sales || 0).toFixed(2)}`)
+      .row2('SST Tax Collected:', `RM ${(shiftData.tax_collected || 0).toFixed(2)}`)
+      .row2('Cash Sales:', `RM ${(shiftData.cash_sales || 0).toFixed(2)}`)
+      .row2('Card Sales:', `RM ${(shiftData.card_sales || 0).toFixed(2)}`)
+      .row2('QR / E-Wallet Sales:', `RM ${(shiftData.qr_sales || 0).toFixed(2)}`)
+      .divider('-')
+      .bold(true)
+      .textLine('CASH TILL RECONCILIATION')
+      .bold(false)
+      .row2('Starting Cash Float:', `RM ${(shiftData.opening_float || shiftData.opening_cash_float || 0).toFixed(2)}`)
+      .row2('Net Cash Sales:', `+RM ${(shiftData.cash_sales || 0).toFixed(2)}`)
+      .bold(true)
+      .row2('Expected Drawer Cash:', `RM ${(shiftData.expected_cash || shiftData.expected_cash_in_till || 0).toFixed(2)}`)
+      .bold(false);
+
+    if (!isXReport) {
+      const variance = shiftData.cash_variance || 0;
+      const varianceSign = variance >= 0 ? `+RM ${variance.toFixed(2)} (OVER)` : `-RM ${Math.abs(variance).toFixed(2)} (SHORT)`;
+
+      builder
+        .row2('Physical Cash Counted:', `RM ${(shiftData.closing_counted || 0).toFixed(2)}`)
+        .bold(true)
+        .row2('CASH VARIANCE:', varianceSign)
+        .bold(false);
+    }
+
+    builder
+      .divider('=')
+      .align('CENTER')
+      .textLine(isXReport ? 'MID-SHIFT TELEMETRY ONLY' : 'FINANCIAL SHIFT AUDIT CLOSED')
+      .textLine('Verified By Manager / Cashier:')
+      .textLine('')
+      .textLine('_____________________________')
+      .textLine('')
+      .cut(3);
+
+    return builder.getBytes();
+  }
 }
 
 /**
