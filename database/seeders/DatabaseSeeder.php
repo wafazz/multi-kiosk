@@ -7,6 +7,9 @@ use App\Models\Branch;
 use App\Models\Company;
 use App\Models\InventoryBalance;
 use App\Models\Kiosk;
+use App\Models\ModifierGroup;
+use App\Models\ModifierOption;
+use App\Models\ModifierOptionRecipe;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
@@ -306,6 +309,150 @@ class DatabaseSeeder extends Seeder
 
             $products[$p['sku']] = $product;
         }
+
+        // 6.5 Seed Modifier Groups & Add-on BOM Recipes
+        // Group 1: Espresso Shots & Boosters (Multiple Choice)
+        $modGroupShots = ModifierGroup::create([
+            'company_id' => $company->id,
+            'name' => 'Espresso Shots & Boosters',
+            'selection_type' => 'MULTIPLE',
+            'is_required' => false,
+            'min_selections' => 0,
+            'max_selections' => 3,
+            'is_active' => true,
+        ]);
+
+        $optExtraShot = ModifierOption::create([
+            'modifier_group_id' => $modGroupShots->id,
+            'name' => 'Extra Espresso Shot (18g)',
+            'price_adjustment' => 3.00,
+            'is_active' => true,
+        ]);
+        ModifierOptionRecipe::create([
+            'modifier_option_id' => $optExtraShot->id,
+            'raw_material_id' => $rawMaterials['RM-COF-01']->id,
+            'quantity_required' => 18.0, // 18g beans
+        ]);
+
+        $optDoubleShot = ModifierOption::create([
+            'modifier_group_id' => $modGroupShots->id,
+            'name' => 'Double Extra Shot (36g)',
+            'price_adjustment' => 5.50,
+            'is_active' => true,
+        ]);
+        ModifierOptionRecipe::create([
+            'modifier_option_id' => $optDoubleShot->id,
+            'raw_material_id' => $rawMaterials['RM-COF-01']->id,
+            'quantity_required' => 36.0,
+        ]);
+
+        // Group 2: Dairy & Plant-Based Milk Alternatives (Single Choice)
+        $modGroupMilk = ModifierGroup::create([
+            'company_id' => $company->id,
+            'name' => 'Milk & Dairy Alternatives',
+            'selection_type' => 'SINGLE',
+            'is_required' => false,
+            'min_selections' => 0,
+            'max_selections' => 1,
+            'is_active' => true,
+        ]);
+
+        $optWholeMilk = ModifierOption::create([
+            'modifier_group_id' => $modGroupMilk->id,
+            'name' => 'Fresh Whole Milk (Default)',
+            'price_adjustment' => 0.00,
+            'is_active' => true,
+        ]);
+
+        $optOatMilkSwap = ModifierOption::create([
+            'modifier_group_id' => $modGroupMilk->id,
+            'name' => 'Oat Milk (Barista Edition)',
+            'price_adjustment' => 2.50,
+            'is_active' => true,
+        ]);
+        ModifierOptionRecipe::create([
+            'modifier_option_id' => $optOatMilkSwap->id,
+            'raw_material_id' => $rawMaterials['RM-MLK-02']->id,
+            'quantity_required' => 180.0, // 180ml oat milk
+        ]);
+
+        // Group 3: Syrups & Drizzles (Multiple Choice)
+        $modGroupSyrups = ModifierGroup::create([
+            'company_id' => $company->id,
+            'name' => 'Syrups & Flavor Drizzles',
+            'selection_type' => 'MULTIPLE',
+            'is_required' => false,
+            'min_selections' => 0,
+            'max_selections' => 3,
+            'is_active' => true,
+        ]);
+
+        $optVanillaPump = ModifierOption::create([
+            'modifier_group_id' => $modGroupSyrups->id,
+            'name' => 'Vanilla Syrup Pump (15ml)',
+            'price_adjustment' => 1.50,
+            'is_active' => true,
+        ]);
+        ModifierOptionRecipe::create([
+            'modifier_option_id' => $optVanillaPump->id,
+            'raw_material_id' => $rawMaterials['RM-SYR-01']->id,
+            'quantity_required' => 15.0, // 15ml
+        ]);
+
+        $optCaramelDrizzle = ModifierOption::create([
+            'modifier_group_id' => $modGroupSyrups->id,
+            'name' => 'Caramel Sauce Drizzle (20ml)',
+            'price_adjustment' => 2.00,
+            'is_active' => true,
+        ]);
+        ModifierOptionRecipe::create([
+            'modifier_option_id' => $optCaramelDrizzle->id,
+            'raw_material_id' => $rawMaterials['RM-SYR-02']->id,
+            'quantity_required' => 20.0, // 20ml
+        ]);
+
+        // Group 4: Temperature & Sweetness (Single Choice, RM 0.00)
+        $modGroupSweetness = ModifierGroup::create([
+            'company_id' => $company->id,
+            'name' => 'Sweetness & Ice Level',
+            'selection_type' => 'SINGLE',
+            'is_required' => false,
+            'min_selections' => 0,
+            'max_selections' => 1,
+            'is_active' => true,
+        ]);
+
+        ModifierOption::create([
+            'modifier_group_id' => $modGroupSweetness->id,
+            'name' => 'Regular Sweetness (100%)',
+            'price_adjustment' => 0.00,
+            'is_active' => true,
+        ]);
+        ModifierOption::create([
+            'modifier_group_id' => $modGroupSweetness->id,
+            'name' => 'Less Sweet (50%)',
+            'price_adjustment' => 0.00,
+            'is_active' => true,
+        ]);
+        ModifierOption::create([
+            'modifier_group_id' => $modGroupSweetness->id,
+            'name' => 'Sugar Free (0%)',
+            'price_adjustment' => 0.00,
+            'is_active' => true,
+        ]);
+
+        // Attach modifier groups to coffee products
+        $coffeeProductIds = [
+            $products['LAT-ICE-16']->id,
+            $products['AME-HOT-12']->id,
+            $products['MAC-CAR-16']->id,
+            $products['OAT-LAT-16']->id,
+        ];
+
+        $modGroupShots->products()->sync($coffeeProductIds);
+        $modGroupMilk->products()->sync([$products['LAT-ICE-16']->id, $products['MAC-CAR-16']->id]);
+        $modGroupSyrups->products()->sync($coffeeProductIds);
+        $modGroupSweetness->products()->sync($coffeeProductIds);
 
         // 7. Staff & Roles
         $pinDefault = Hash::make('1234');

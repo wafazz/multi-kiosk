@@ -20,8 +20,27 @@ import {
   KeyRound,
   X,
   Store,
-  Layers
+  Layers,
+  Sliders,
+  Check
 } from 'lucide-react';
+
+interface ModifierOption {
+  id: number;
+  name: string;
+  price_adjustment: number;
+  bom_cost: number;
+}
+
+interface ModifierGroup {
+  id: number;
+  name: string;
+  selection_type: 'SINGLE' | 'MULTIPLE';
+  is_required: boolean;
+  min_selections: number;
+  max_selections: number;
+  options: ModifierOption[];
+}
 
 interface Product {
   id: number;
@@ -32,6 +51,7 @@ interface Product {
   selling_price: number;
   image_url: string | null;
   ingredient_count: number;
+  modifier_groups?: ModifierGroup[];
 }
 
 interface Kiosk {
@@ -43,9 +63,18 @@ interface Kiosk {
   };
 }
 
+interface ModifierSelection {
+  modifier_option_id: number;
+  name: string;
+  price_adjustment: number;
+}
+
 interface CartItem {
+  cart_item_id: string;
   product: Product;
   quantity: number;
+  unit_price: number;
+  modifiers: ModifierSelection[];
 }
 
 interface Props {
@@ -73,6 +102,11 @@ export default function KioskTerminal({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [currentTime, setCurrentTime] = useState<string>('');
+
+  // Customization modal state
+  const [showCustomizeModal, setShowCustomizeModal] = useState<boolean>(false);
+  const [customizingProduct, setCustomizingProduct] = useState<Product | null>(null);
+  const [selectedModifiers, setSelectedModifiers] = useState<ModifierSelection[]>([]);
 
   // Modals state
   const [showPayModal, setShowPayModal] = useState<boolean>(false);
@@ -110,24 +144,116 @@ export default function KioskTerminal({
     return matchesCategory && matchesSearch;
   });
 
-  // Cart operations
-  const addToCart = (product: Product) => {
+  // Handle Product Click (Customize or Direct Add)
+  const handleProductClick = (product: Product) => {
+    if (product.modifier_groups && product.modifier_groups.length > 0) {
+      setCustomizingProduct(product);
+      setSelectedModifiers([]);
+      setShowCustomizeModal(true);
+    } else {
+      addStandardToCart(product);
+    }
+  };
+
+  const addStandardToCart = (product: Product) => {
+    const cartItemId = `prod-${product.id}`;
     setCart((prev) => {
-      const existing = prev.find((item) => item.product.id === product.id);
+      const existing = prev.find((item) => item.cart_item_id === cartItemId);
       if (existing) {
         return prev.map((item) =>
-          item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          item.cart_item_id === cartItemId ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
-      return [...prev, { product, quantity: 1 }];
+      return [
+        ...prev,
+        {
+          cart_item_id: cartItemId,
+          product,
+          quantity: 1,
+          unit_price: product.selling_price,
+          modifiers: [],
+        },
+      ];
     });
   };
 
-  const updateQuantity = (productId: number, delta: number) => {
+  // Modifier toggles inside Customize Modal
+  const handleToggleModifier = (group: ModifierGroup, option: ModifierOption) => {
+    if (group.selection_type === 'SINGLE') {
+      // Remove other options from this same group
+      const optionIdsInGroup = group.options.map((o) => o.id);
+      const filtered = selectedModifiers.filter((m) => !optionIdsInGroup.includes(m.modifier_option_id));
+      setSelectedModifiers([
+        ...filtered,
+        {
+          modifier_option_id: option.id,
+          name: option.name,
+          price_adjustment: option.price_adjustment,
+        },
+      ]);
+    } else {
+      // Multiple selection
+      const exists = selectedModifiers.some((m) => m.modifier_option_id === option.id);
+      if (exists) {
+        setSelectedModifiers(selectedModifiers.filter((m) => m.modifier_option_id !== option.id));
+      } else {
+        setSelectedModifiers([
+          ...selectedModifiers,
+          {
+            modifier_option_id: option.id,
+            name: option.name,
+            price_adjustment: option.price_adjustment,
+          },
+        ]);
+      }
+    }
+  };
+
+  const isOptionSelected = (optionId: number) => {
+    return selectedModifiers.some((m) => m.modifier_option_id === optionId);
+  };
+
+  const liveCustomizedUnitPrice = customizingProduct
+    ? customizingProduct.selling_price + selectedModifiers.reduce((acc, m) => acc + m.price_adjustment, 0)
+    : 0;
+
+  const handleAddCustomizedToCart = () => {
+    if (!customizingProduct) return;
+
+    // Generate unique key based on sorted modifier IDs
+    const modKey = selectedModifiers
+      .map((m) => m.modifier_option_id)
+      .sort()
+      .join('-');
+    const cartItemId = `prod-${customizingProduct.id}-mods-${modKey}`;
+
+    setCart((prev) => {
+      const existing = prev.find((item) => item.cart_item_id === cartItemId);
+      if (existing) {
+        return prev.map((item) =>
+          item.cart_item_id === cartItemId ? { ...item, quantity: item.quantity + 1 } : item
+        );
+      }
+      return [
+        ...prev,
+        {
+          cart_item_id: cartItemId,
+          product: customizingProduct,
+          quantity: 1,
+          unit_price: liveCustomizedUnitPrice,
+          modifiers: selectedModifiers,
+        },
+      ];
+    });
+
+    setShowCustomizeModal(false);
+  };
+
+  const updateQuantity = (cartItemId: string, delta: number) => {
     setCart((prev) => {
       return prev
         .map((item) => {
-          if (item.product.id === productId) {
+          if (item.cart_item_id === cartItemId) {
             const newQty = item.quantity + delta;
             return newQty > 0 ? { ...item, quantity: newQty } : null;
           }
@@ -139,7 +265,7 @@ export default function KioskTerminal({
 
   const clearCart = () => setCart([]);
 
-  const subtotal = cart.reduce((acc, item) => acc + item.product.selling_price * item.quantity, 0);
+  const subtotal = cart.reduce((acc, item) => acc + item.unit_price * item.quantity, 0);
   const tax = round(subtotal * 0.06, 2);
   const grandTotal = round(subtotal + tax, 2);
 
@@ -167,7 +293,12 @@ export default function KioskTerminal({
         items: cart.map((item) => ({
           product_id: item.product.id,
           quantity: item.quantity,
-          unit_price: item.product.selling_price,
+          unit_price: item.unit_price,
+          modifiers: item.modifiers.map((m) => ({
+            modifier_option_id: m.modifier_option_id,
+            name: m.name,
+            price_adjustment: m.price_adjustment,
+          })),
         })),
       };
 
@@ -344,34 +475,39 @@ export default function KioskTerminal({
           {/* Products Grid */}
           <div className="flex-grow-1 overflow-y-auto pe-1">
             <div className="kiosk-grid">
-              {filteredProducts.map((p) => (
-                <div
-                  key={p.id}
-                  onClick={() => addToCart(p)}
-                  className="kiosk-product-card p-3 d-flex flex-column justify-content-between"
-                  style={{ minHeight: 140 }}
-                >
-                  <div>
-                    <div className="d-flex justify-content-between align-items-start mb-1">
-                      <span className="badge bg-secondary bg-opacity-50 text-light" style={{ fontSize: '0.65rem' }}>
-                        {p.category}
-                      </span>
-                      <span className="badge badge-soft-info" style={{ fontSize: '0.6rem' }} title="Recipe BOM Linked">
-                        BOM
-                      </span>
+              {filteredProducts.map((p) => {
+                const hasModifiers = p.modifier_groups && p.modifier_groups.length > 0;
+                return (
+                  <div
+                    key={p.id}
+                    onClick={() => handleProductClick(p)}
+                    className="kiosk-product-card p-3 d-flex flex-column justify-content-between position-relative"
+                    style={{ minHeight: 140 }}
+                  >
+                    <div>
+                      <div className="d-flex justify-content-between align-items-start mb-1">
+                        <span className="badge bg-secondary bg-opacity-50 text-light" style={{ fontSize: '0.65rem' }}>
+                          {p.category}
+                        </span>
+                        {hasModifiers && (
+                          <span className="badge badge-soft-warning d-flex align-items-center gap-1" style={{ fontSize: '0.6rem' }}>
+                            <Sliders size={10} /> Add-ons
+                          </span>
+                        )}
+                      </div>
+                      <div className="fw-bold text-white mb-1" style={{ fontSize: '0.95rem' }}>{p.name}</div>
+                      <div className="text-muted small" style={{ fontSize: '0.75rem' }}>{p.sku}</div>
                     </div>
-                    <div className="fw-bold text-white mb-1" style={{ fontSize: '0.95rem' }}>{p.name}</div>
-                    <div className="text-muted small" style={{ fontSize: '0.75rem' }}>{p.sku}</div>
-                  </div>
 
-                  <div className="d-flex align-items-center justify-content-between pt-2 border-top border-secondary border-opacity-25 mt-2">
-                    <span className="fs-6 fw-bold text-info font-monospace">RM {p.selling_price.toFixed(2)}</span>
-                    <button className="btn btn-xs btn-primary rounded-circle p-1 d-flex align-items-center justify-content-center" style={{ width: 26, height: 26 }}>
-                      <Plus size={14} />
-                    </button>
+                    <div className="d-flex align-items-center justify-content-between pt-2 border-top border-secondary border-opacity-25 mt-2">
+                      <span className="fs-6 fw-bold text-info font-monospace">RM {p.selling_price.toFixed(2)}</span>
+                      <button className="btn btn-xs btn-primary rounded-circle p-1 d-flex align-items-center justify-content-center" style={{ width: 26, height: 26 }}>
+                        <Plus size={14} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -379,7 +515,7 @@ export default function KioskTerminal({
         {/* Right Cart & Checkout Drawer */}
         <div
           className="bg-slate-950 border-start border-secondary border-opacity-25 d-flex flex-column"
-          style={{ width: '100%', maxWidth: 380, minWidth: 320 }}
+          style={{ width: '100%', maxWidth: 390, minWidth: 330 }}
         >
           {/* Cart Header */}
           <div className="p-3 border-bottom border-secondary border-opacity-25 d-flex align-items-center justify-content-between">
@@ -406,33 +542,50 @@ export default function KioskTerminal({
               <div className="d-flex flex-column gap-2">
                 {cart.map((item) => (
                   <div
-                    key={item.product.id}
-                    className="p-2 rounded-3 bg-slate-900 border border-secondary border-opacity-50 d-flex align-items-center justify-content-between"
+                    key={item.cart_item_id}
+                    className="p-2 rounded-3 bg-slate-900 border border-secondary border-opacity-50 d-flex flex-column gap-1"
                   >
-                    <div className="flex-grow-1 pe-2">
-                      <div className="fw-bold text-white small">{item.product.name}</div>
-                      <div className="text-info font-monospace small">
-                        RM {item.product.selling_price.toFixed(2)}
+                    <div className="d-flex align-items-start justify-content-between">
+                      <div className="flex-grow-1 pe-2">
+                        <div className="fw-bold text-white small">{item.product.name}</div>
+                        <div className="text-info font-monospace small">
+                          RM {item.unit_price.toFixed(2)} each
+                        </div>
+                      </div>
+
+                      <div className="d-flex align-items-center gap-2">
+                        <button
+                          onClick={() => updateQuantity(item.cart_item_id, -1)}
+                          className="btn btn-xs btn-outline-secondary text-white p-1 rounded-circle d-flex align-items-center justify-content-center"
+                          style={{ width: 24, height: 24 }}
+                        >
+                          <Minus size={12} />
+                        </button>
+                        <span className="font-monospace fw-bold text-white px-1">{item.quantity}</span>
+                        <button
+                          onClick={() => updateQuantity(item.cart_item_id, 1)}
+                          className="btn btn-xs btn-outline-secondary text-white p-1 rounded-circle d-flex align-items-center justify-content-center"
+                          style={{ width: 24, height: 24 }}
+                        >
+                          <Plus size={12} />
+                        </button>
                       </div>
                     </div>
 
-                    <div className="d-flex align-items-center gap-2">
-                      <button
-                        onClick={() => updateQuantity(item.product.id, -1)}
-                        className="btn btn-xs btn-outline-secondary text-white p-1 rounded-circle d-flex align-items-center justify-content-center"
-                        style={{ width: 24, height: 24 }}
-                      >
-                        <Minus size={12} />
-                      </button>
-                      <span className="font-monospace fw-bold text-white px-1">{item.quantity}</span>
-                      <button
-                        onClick={() => updateQuantity(item.product.id, 1)}
-                        className="btn btn-xs btn-outline-secondary text-white p-1 rounded-circle d-flex align-items-center justify-content-center"
-                        style={{ width: 24, height: 24 }}
-                      >
-                        <Plus size={12} />
-                      </button>
-                    </div>
+                    {/* Applied Modifiers Pills */}
+                    {item.modifiers.length > 0 && (
+                      <div className="d-flex flex-wrap gap-1 pt-1 border-top border-secondary border-opacity-25 mt-1">
+                        {item.modifiers.map((mod, idx) => (
+                          <span
+                            key={idx}
+                            className="badge bg-slate-800 text-info border border-secondary border-opacity-50"
+                            style={{ fontSize: '0.65rem' }}
+                          >
+                            +{mod.name} {mod.price_adjustment > 0 ? `(+RM ${mod.price_adjustment.toFixed(2)})` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -464,6 +617,89 @@ export default function KioskTerminal({
           </div>
         </div>
       </div>
+
+      {/* Modal: Customize Product Modifiers & Add-ons */}
+      {showCustomizeModal && customizingProduct && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.75)' }} tabIndex={-1}>
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content bg-slate-900 text-white border border-secondary shadow-lg">
+              <div className="modal-header border-secondary">
+                <div>
+                  <h5 className="modal-title fw-bold text-white d-flex align-items-center gap-2">
+                    <Sliders size={18} className="text-info" />
+                    Customize: {customizingProduct.name}
+                  </h5>
+                  <div className="text-muted small">
+                    Base Price: <span className="text-info font-monospace">RM {customizingProduct.selling_price.toFixed(2)}</span>
+                  </div>
+                </div>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowCustomizeModal(false)}></button>
+              </div>
+
+              <div className="modal-body p-3 overflow-y-auto" style={{ maxHeight: '60vh' }}>
+                {customizingProduct.modifier_groups?.map((group) => (
+                  <div key={group.id} className="mb-3 p-3 rounded-3 bg-slate-950 border border-secondary border-opacity-50">
+                    <div className="d-flex align-items-center justify-content-between mb-2">
+                      <span className="fw-bold small text-white">{group.name}</span>
+                      <span className="badge badge-soft-secondary" style={{ fontSize: '0.65rem' }}>
+                        {group.selection_type === 'SINGLE' ? 'Choose 1' : 'Optional Add-ons'}
+                      </span>
+                    </div>
+
+                    <div className="d-flex flex-column gap-2">
+                      {group.options.map((opt) => {
+                        const selected = isOptionSelected(opt.id);
+                        return (
+                          <div
+                            key={opt.id}
+                            onClick={() => handleToggleModifier(group, opt)}
+                            className={`p-2 rounded-3 border d-flex align-items-center justify-content-between cursor-pointer transition-all ${
+                              selected
+                                ? 'bg-primary bg-opacity-20 border-primary text-white'
+                                : 'bg-slate-900 border-secondary border-opacity-50 text-light'
+                            }`}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <div className="d-flex align-items-center gap-2">
+                              <div
+                                className={`rounded-circle border d-flex align-items-center justify-content-center ${
+                                  selected ? 'bg-primary border-primary text-white' : 'border-secondary'
+                                }`}
+                                style={{ width: 20, height: 20 }}
+                              >
+                                {selected && <Check size={12} />}
+                              </div>
+                              <span className="small fw-medium">{opt.name}</span>
+                            </div>
+
+                            <span className="font-monospace small text-info fw-semibold">
+                              {opt.price_adjustment > 0 ? `+RM ${opt.price_adjustment.toFixed(2)}` : 'FREE'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="modal-footer border-secondary d-flex justify-content-between">
+                <div>
+                  <span className="text-muted small">Item Total: </span>
+                  <span className="fw-bold fs-5 font-monospace text-info">RM {liveCustomizedUnitPrice.toFixed(2)}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAddCustomizedToCart}
+                  className="btn btn-primary btn-sm px-4 fw-bold"
+                >
+                  Add to Order
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Payment Selection & Cash Tender */}
       {showPayModal && (
@@ -612,9 +848,18 @@ export default function KioskTerminal({
 
                   <div className="text-start">
                     {lastOrder.items?.map((item: any) => (
-                      <div key={item.product.id} className="d-flex justify-content-between text-dark">
-                        <span>{item.quantity}x {item.product.name}</span>
-                        <span>RM {(item.product.selling_price * item.quantity).toFixed(2)}</span>
+                      <div key={item.cart_item_id || item.product.id} className="mb-1">
+                        <div className="d-flex justify-content-between text-dark fw-semibold">
+                          <span>{item.quantity}x {item.product.name}</span>
+                          <span>RM {(item.unit_price * item.quantity).toFixed(2)}</span>
+                        </div>
+                        {item.modifiers && item.modifiers.length > 0 && (
+                          <div className="ps-2 text-muted" style={{ fontSize: '0.75rem' }}>
+                            {item.modifiers.map((m: any, idx: number) => (
+                              <div key={idx}>+ {m.name} {m.price_adjustment > 0 ? `(RM ${m.price_adjustment.toFixed(2)})` : ''}</div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -643,10 +888,10 @@ export default function KioskTerminal({
                 {/* Automated BOM Stock Deduction Audit Alert */}
                 <div className="p-2 rounded bg-info bg-opacity-10 border border-info border-opacity-25 small text-info text-start">
                   <div className="d-flex align-items-center gap-1 fw-bold">
-                    <Layers size={14} /> Recipe BOM Deductions Recorded
+                    <Layers size={14} /> Recipe & Modifier BOM Deductions Recorded
                   </div>
                   <div style={{ fontSize: '0.75rem' }}>
-                    Standard ingredient quantities automatically deducted from stockroom. Material cost: RM {lastOrder.total_material_cost?.toFixed(2)}.
+                    Base ingredients and add-on recipes automatically deducted from stockroom. Material cost snapshot: RM {lastOrder.total_material_cost?.toFixed(2)}.
                   </div>
                 </div>
               </div>

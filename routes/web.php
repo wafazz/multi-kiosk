@@ -40,6 +40,15 @@ Route::put('/products/{product}', [ProductCatalogController::class, 'updateProdu
 Route::post('/products/{product}/recipe', [ProductCatalogController::class, 'syncRecipe'])->name('products.recipe');
 Route::delete('/products/{product}', [ProductCatalogController::class, 'destroyProduct'])->name('products.destroy');
 
+// Product Modifiers & Add-on Recipe BOM
+Route::get('/modifiers', [\App\Http\Controllers\ModifierController::class, 'index'])->name('modifiers.index');
+Route::post('/modifiers/groups', [\App\Http\Controllers\ModifierController::class, 'storeGroup'])->name('modifiers.groups.store');
+Route::put('/modifiers/groups/{group}', [\App\Http\Controllers\ModifierController::class, 'updateGroup'])->name('modifiers.groups.update');
+Route::delete('/modifiers/groups/{group}', [\App\Http\Controllers\ModifierController::class, 'destroyGroup'])->name('modifiers.groups.destroy');
+Route::post('/modifiers/options', [\App\Http\Controllers\ModifierController::class, 'storeOption'])->name('modifiers.options.store');
+Route::post('/modifiers/options/{option}/recipe', [\App\Http\Controllers\ModifierController::class, 'syncOptionRecipe'])->name('modifiers.options.recipe');
+Route::delete('/modifiers/options/{option}', [\App\Http\Controllers\ModifierController::class, 'destroyOption'])->name('modifiers.options.destroy');
+
 // Raw Materials & Inventory Master
 Route::get('/raw-materials', [RawMaterialController::class, 'index'])->name('raw-materials.index');
 Route::post('/raw-materials', [RawMaterialController::class, 'store'])->name('raw-materials.store');

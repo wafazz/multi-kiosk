@@ -39,6 +39,11 @@ class Product extends Model
         return $this->hasMany(RecipeItem::class);
     }
 
+    public function modifierGroups(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(ModifierGroup::class, 'product_modifier_groups');
+    }
+
     public function orderItems(): HasMany
     {
         return $this->hasMany(OrderItem::class);

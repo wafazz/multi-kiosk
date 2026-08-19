@@ -43,13 +43,14 @@ class InventoryService
         $totalMaterialCost = 0.0;
 
         DB::transaction(function () use ($order, $location, &$deductions, &$totalMaterialCost) {
-            foreach ($order->items()->with('product.recipeItems.rawMaterial')->get() as $item) {
+            foreach ($order->items()->with(['product.recipeItems.rawMaterial', 'modifiers.modifierOption.recipes.rawMaterial'])->get() as $item) {
                 $product = $item->product;
                 if (!$product) continue;
 
                 $itemQty = $item->quantity;
                 $itemMaterialCost = 0.0;
 
+                // 1. Base Product BOM Deductions
                 foreach ($product->recipeItems as $recipeItem) {
                     $rawMaterial = $recipeItem->rawMaterial;
                     if (!$rawMaterial) continue;
@@ -80,7 +81,54 @@ class InventoryService
                         'deducted_qty' => $qtyToDeduct,
                         'remaining_qty' => $balance->quantity_on_hand,
                         'cost' => $lineCost,
+                        'type' => 'BASE_PRODUCT',
                     ];
+                }
+
+                // 2. Selected Modifier Add-on BOM Deductions
+                foreach ($item->modifiers as $orderModifier) {
+                    $modifierOption = $orderModifier->modifierOption;
+                    if (!$modifierOption) continue;
+
+                    $modifierMaterialCost = 0.0;
+
+                    foreach ($modifierOption->recipes as $modRecipe) {
+                        $rawMaterial = $modRecipe->rawMaterial;
+                        if (!$rawMaterial) continue;
+
+                        $qtyToDeduct = (float)$modRecipe->quantity_required * $itemQty;
+                        $costPerBaseUnit = (float)$rawMaterial->standard_cost_per_base_unit;
+                        $lineCost = $qtyToDeduct * $costPerBaseUnit;
+                        $modifierMaterialCost += $lineCost;
+                        $itemMaterialCost += $lineCost;
+
+                        // Decrement or create balance record
+                        $balance = InventoryBalance::firstOrCreate(
+                            [
+                                'location_id' => $location->id,
+                                'raw_material_id' => $rawMaterial->id,
+                            ],
+                            [
+                                'quantity_on_hand' => 0.0000,
+                            ]
+                        );
+
+                        $balance->quantity_on_hand = (float)$balance->quantity_on_hand - $qtyToDeduct;
+                        $balance->save();
+
+                        $deductions[] = [
+                            'raw_material_id' => $rawMaterial->id,
+                            'name' => "{$rawMaterial->name} ({$modifierOption->name})",
+                            'base_uom' => $rawMaterial->base_uom,
+                            'deducted_qty' => $qtyToDeduct,
+                            'remaining_qty' => $balance->quantity_on_hand,
+                            'cost' => $lineCost,
+                            'type' => 'MODIFIER_ADDON',
+                        ];
+                    }
+
+                    $orderModifier->material_cost_snapshot = $itemQty > 0 ? ($modifierMaterialCost / $itemQty) : 0;
+                    $orderModifier->save();
                 }
 
                 $item->unit_cost_snapshot = $itemQty > 0 ? ($itemMaterialCost / $itemQty) : 0;

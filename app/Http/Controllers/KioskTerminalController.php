@@ -38,10 +38,10 @@ class KioskTerminalController extends Controller
             $selectedKiosk = $allKiosks->first();
         }
 
-        // Fetch sellable products
+        // Fetch sellable products with recipe and modifier groups
         $products = Product::where('company_id', $company->id ?? 1)
             ->where('is_active', true)
-            ->with('recipeItems.rawMaterial')
+            ->with(['recipeItems.rawMaterial', 'modifierGroups.options.recipes.rawMaterial'])
             ->get()
             ->map(function ($p) {
                 return [
@@ -53,6 +53,24 @@ class KioskTerminalController extends Controller
                     'selling_price' => (float)$p->selling_price,
                     'image_url' => $p->image_url,
                     'ingredient_count' => $p->recipeItems->count(),
+                    'modifier_groups' => $p->modifierGroups->map(function ($g) {
+                        return [
+                            'id' => $g->id,
+                            'name' => $g->name,
+                            'selection_type' => $g->selection_type,
+                            'is_required' => $g->is_required,
+                            'min_selections' => $g->min_selections,
+                            'max_selections' => $g->max_selections,
+                            'options' => $g->options->where('is_active', true)->map(function ($opt) {
+                                return [
+                                    'id' => $opt->id,
+                                    'name' => $opt->name,
+                                    'price_adjustment' => (float)$opt->price_adjustment,
+                                    'bom_cost' => $opt->calculateBomCost(),
+                                ];
+                            })->values(),
+                        ];
+                    })->values(),
                 ];
             });
 
@@ -97,6 +115,10 @@ class KioskTerminalController extends Controller
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.unit_price' => 'required|numeric|min:0',
+            'items.*.modifiers' => 'nullable|array',
+            'items.*.modifiers.*.modifier_option_id' => 'required|exists:modifier_options,id',
+            'items.*.modifiers.*.name' => 'required|string',
+            'items.*.modifiers.*.price_adjustment' => 'nullable|numeric',
         ]);
 
         $kiosk = Kiosk::with('branch')->findOrFail($validated['kiosk_id']);
@@ -106,7 +128,8 @@ class KioskTerminalController extends Controller
 
         $totalAmount = 0.0;
         foreach ($validated['items'] as $item) {
-            $totalAmount += ((float)$item['unit_price'] * (int)$item['quantity']);
+            $itemLineTotal = (float)$item['unit_price'] * (int)$item['quantity'];
+            $totalAmount += $itemLineTotal;
         }
 
         $discount = (float)($validated['discount_amount'] ?? 0.0);
@@ -133,7 +156,7 @@ class KioskTerminalController extends Controller
 
         foreach ($validated['items'] as $item) {
             $product = Product::find($item['product_id']);
-            OrderItem::create([
+            $orderItem = OrderItem::create([
                 'order_id' => $order->id,
                 'product_id' => $item['product_id'],
                 'quantity' => $item['quantity'],
@@ -141,9 +164,21 @@ class KioskTerminalController extends Controller
                 'total_price' => (float)$item['unit_price'] * (int)$item['quantity'],
                 'unit_cost_snapshot' => $product ? $product->cost_price : 0.00,
             ]);
+
+            if (!empty($item['modifiers'])) {
+                foreach ($item['modifiers'] as $mod) {
+                    \App\Models\OrderItemModifier::create([
+                        'order_item_id' => $orderItem->id,
+                        'modifier_option_id' => $mod['modifier_option_id'],
+                        'modifier_name_snapshot' => $mod['name'],
+                        'price_adjustment_snapshot' => $mod['price_adjustment'] ?? 0.00,
+                        'material_cost_snapshot' => 0.00,
+                    ]);
+                }
+            }
         }
 
-        // Trigger automated recipe BOM deduction
+        // Trigger automated recipe BOM deduction (including base recipe + modifiers)
         $deductionResult = $inventoryService->deductRecipeStockForOrder($order);
 
         return response()->json([

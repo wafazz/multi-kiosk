@@ -68,24 +68,32 @@
 - Interactive Bill of Materials (BOM) builder linking products to raw ingredients.
 - Dynamic recipe cost calculation with live projected gross margins.
 
-### 3. 🛒 Location-Aware Inventory & Automated BOM Deduction
+### 3. ☕ Dynamic Product Modifiers & Add-on Recipe BOM Deductions
+- Full support for drink & food customizations:
+  - **Extra Shots & Boosters:** e.g. Extra Espresso Shot (+RM 3.00) $\rightarrow$ automatically deducts an extra $+18\text{g}$ coffee beans.
+  - **Milk Alternatives:** e.g. Oat Milk Swap (+RM 2.50) $\rightarrow$ automatically deducts $+180\text{ml}$ Oat Milk.
+  - **Syrups & Flavors:** e.g. Vanilla Syrup Pump (+RM 1.50) $\rightarrow$ deducts $+15\text{ml}$ Vanilla Syrup.
+  - **Sweetness & Temperature:** Single/Multiple choice rules with custom constraints (`min_selections`, `max_selections`, `is_required`).
+- Dynamic live cost impact & gross margin calculation directly in the HQ Modifier Builder.
+
+### 4. 🛒 Location-Aware Inventory & Automated BOM Deduction
 - Independent stock ledger across Central Warehouses, Branch Stores, and Kiosk Stockrooms.
-- **Automated BOM Recipe Stock Deduction:** Completing a sale automatically decrements raw ingredient quantities from the specific physical kiosk's stockroom.
+- **Automated BOM Recipe Stock Deduction:** Completing a sale automatically decrements raw ingredient quantities (both base product recipe AND selected modifier add-ons) from the specific physical kiosk's stockroom.
 - Multi-step Stock Transfer state machine (`REQUESTED` $\rightarrow$ `APPROVED` $\rightarrow$ `DISPATCHED` $\rightarrow$ `RECEIVED`).
 - Dedicated Wastage & Spoilage logger with financial cost impact audit.
 
-### 4. 👥 Workforce Attendance & Optional Hourly Payroll
+### 5. 👥 Workforce Attendance & Optional Hourly Payroll
 - Cross-kiosk staff roaming (clock in at Kiosk A, clock out at Kiosk B).
 - Fast 4–6 digit numeric PIN authentication directly at kiosk terminals.
 - **15-Minute Standard Rounding Engine:** Converts raw work time into standardized payable hours.
 - Support for multiple compensation models: `HOURLY`, `DAILY`, `MONTHLY`, `NONE`.
 
-### 5. 📊 Executive Gross Contribution Financial BI
+### 6. 📊 Executive Gross Contribution Financial BI
 - Real-time financial contribution tracking:
   $$\text{Gross Contribution} = \text{Gross Revenue} - \text{BOM Raw Material Cost} - \text{Direct Hourly Labour Wages}$$
 - Dynamic margin percentage breakdown and low-stock alert monitoring.
 
-### 6. 🎨 Branding & Custom Identity
+### 7. 🎨 Branding & Custom Identity
 - Super Admin company logo upload with live preview.
 - Dynamic brand primary color theming reflected across the HQ sidebar and printed receipts.
 
@@ -275,16 +283,19 @@ php artisan test
   ✓ the application redirects root to dashboard .................. 0.08s  
 
    PASS  Tests\Feature\KioskOrderAndInventoryTest
-  ✓ kiosk order processes and deducts bom stock ................... 0.06s  
+  ✓ kiosk order processes and deducts bom stock ................... 0.12s  
+
+   PASS  Tests\Feature\ModifierAndBOMDeductionTest
+  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.20s  
 
    PASS  Tests\Feature\StaffAttendanceAndClockingTest
-  ✓ staff can clock in and clock out at kiosk with pin ............ 0.05s  
+  ✓ staff can clock in and clock out at kiosk with pin ............ 0.13s  
 
    PASS  Tests\Feature\StockTransferLifecycleTest
   ✓ stock transfer lifecycle moves inventory atomically .......... 0.06s  
 
-  Tests:    7 passed (22 assertions)
-  Duration: 0.94s
+  Tests:    8 passed (27 assertions)
+  Duration: 1.98s
 ```
 
 ---
