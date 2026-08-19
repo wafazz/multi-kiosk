@@ -120,6 +120,7 @@
 - **Executive Dashboard:** Live KPI cards for Gross Revenue, BOM Material Cost, Direct Labour Cost, and Gross Contribution with visual margin bars.
 - **Branches & Kiosks (`/branches`):** Register branches, provision kiosks, toggle status (`ONLINE`, `MAINTENANCE`, `INACTIVE`), and view device UIDs.
 - **Products & Recipe BOM (`/products`):** Catalog management and interactive recipe builder calculating unit BOM costs.
+- **Modifiers & Add-ons (`/modifiers`):** Manage customizable add-on groups (shots, milk alternatives, syrups, sweetness) with attached raw material BOM deductions and live profit margin analysis.
 - **Raw Materials Master (`/raw-materials`):** UOM conversion multipliers, standard costs, threshold alert levels, and stock reconciliations.
 - **Stock Transfers & Wastage (`/inventory/transfers`):** Multi-step transfer workflow with stage progression badges and wastage logging.
 - **Staff Directory (`/staff`):** Staff profiles, PIN credentials, roles, and hourly rate configurations.
