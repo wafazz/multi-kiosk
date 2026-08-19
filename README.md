@@ -114,6 +114,12 @@
 - **Audio Chime Alerts:** Synthesized Web Audio API bells triggered when new orders arrive and when tickets are marked ready.
 - **Fulfillment State Machine:** `PENDING` $\rightarrow$ `PREPARING` $\rightarrow$ `READY` $\rightarrow$ `COMPLETED` with 1-click **Ticket Recall** capability.
 
+### 11. ⚡ Offline IndexedDB Order Queue & Auto-Sync Engine
+- **Persistent Client-Side Buffer:** Built-in IndexedDB database (`MK_Enterprise_POS_DB`) stores completed orders, catalog snapshots, and timestamps locally when internet or LAN connection drops.
+- **Continuous Offline Selling:** Cashiers can continue selling, accepting cash, printing physical ESC/POS receipts, and kicking the cash drawer with zero downtime.
+- **Automated Background Sync:** Automatically detects network recovery via browser connection events and flushes buffered orders to the backend cloud.
+- **Idempotency Guarantee:** Client-generated UUIDs prevent duplicate BOM deductions or double-counted sales on intermittent networks.
+
 ---
 
 ## 🛠️ Architecture & Technology Stack
@@ -312,6 +318,9 @@ php artisan test
    PASS  Tests\Feature\ModifierAndBOMDeductionTest
   ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.08s  
 
+   PASS  Tests\Feature\OfflineOrderSyncTest
+  ✓ offline order idempotent sync and inventory deduction ........ 0.09s  
+
    PASS  Tests\Feature\ShiftManagementAndZReportTest
   ✓ shift lifecycle with opening float and z report variance ..... 0.06s  
 
@@ -321,8 +330,8 @@ php artisan test
    PASS  Tests\Feature\StockTransferLifecycleTest
   ✓ stock transfer lifecycle moves inventory atomically .......... 0.05s  
 
-  Tests:    11 passed (63 assertions)
-  Duration: 2.09s
+  Tests:    12 passed (74 assertions)
+  Duration: 2.07s
 ```
 
 ---

@@ -12,6 +12,7 @@ use App\Models\Product;
 use App\Models\Staff;
 use App\Services\AttendanceService;
 use App\Services\InventoryService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -128,10 +129,13 @@ class KioskTerminalController extends Controller
     {
         $company = Company::first();
         $validated = $request->validate([
+            'client_uuid' => 'nullable|string',
             'kiosk_id' => 'required|exists:kiosks,id',
             'staff_id' => 'nullable|exists:staff,id',
             'payment_method' => 'required|in:CASH,CREDIT_CARD,DEBIT_CARD,E_WALLET,QR_PAY,OTHER',
+            'dining_option' => 'nullable|in:TAKEAWAY,DINE_IN',
             'discount_amount' => 'nullable|numeric|min:0',
+            'ordered_at' => 'nullable|date',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
@@ -141,6 +145,19 @@ class KioskTerminalController extends Controller
             'items.*.modifiers.*.name' => 'required|string',
             'items.*.modifiers.*.price_adjustment' => 'nullable|numeric',
         ]);
+
+        // Idempotency check for offline sync retries
+        if (!empty($validated['client_uuid'])) {
+            $existing = Order::where('uuid', $validated['client_uuid'])->first();
+            if ($existing) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Order already processed (idempotent)',
+                    'order' => $existing,
+                    'is_duplicate' => true,
+                ]);
+            }
+        }
 
         $kiosk = Kiosk::with('branch')->findOrFail($validated['kiosk_id']);
         $branch = $kiosk->branch;
@@ -163,8 +180,10 @@ class KioskTerminalController extends Controller
         $tax = round(($totalAmount - $discount) * 0.06, 2); // 6% standard tax
         $netAmount = max(0, ($totalAmount - $discount) + $tax);
 
+        $orderUuid = !empty($validated['client_uuid']) ? $validated['client_uuid'] : (string) Str::uuid();
+
         $order = Order::create([
-            'uuid' => (string) Str::uuid(),
+            'uuid' => $orderUuid,
             'company_id' => $company->id ?? 1,
             'branch_id' => $branch->id,
             'kiosk_id' => $kiosk->id,
@@ -179,7 +198,9 @@ class KioskTerminalController extends Controller
             'payment_method' => $validated['payment_method'],
             'payment_status' => 'PAID',
             'order_status' => 'COMPLETED',
-            'ordered_at' => now(),
+            'fulfillment_status' => 'PENDING',
+            'dining_option' => $validated['dining_option'] ?? 'TAKEAWAY',
+            'ordered_at' => !empty($validated['ordered_at']) ? Carbon::parse($validated['ordered_at']) : now(),
         ]);
 
         foreach ($validated['items'] as $item) {
@@ -214,6 +235,7 @@ class KioskTerminalController extends Controller
             'message' => "Order #{$orderNumber} completed successfully.",
             'order' => [
                 'id' => $order->id,
+                'uuid' => $order->uuid,
                 'order_number' => $order->order_number,
                 'total_amount' => $order->total_amount,
                 'discount_amount' => $order->discount_amount,

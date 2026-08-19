@@ -29,9 +29,15 @@ import {
   FileText,
   DollarSign,
   AlertTriangle,
-  UtensilsCrossed
+  UtensilsCrossed,
+  Wifi,
+  WifiOff,
+  RotateCw,
+  Database,
+  HardDrive
 } from 'lucide-react';
 import { EscPosBuilder, WebSerialPrinter, ReceiptData } from '../../Utils/escpos';
+import { OfflineStorageEngine } from '../../Utils/offlineQueue';
 
 interface ModifierOption {
   id: number;
@@ -127,6 +133,14 @@ export default function KioskTerminal({
   const [cart, setCart] = useState<CartItem[]>([]);
   const [currentTime, setCurrentTime] = useState<string>('');
 
+  // Offline Queue State
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [pendingOfflineCount, setPendingOfflineCount] = useState<number>(0);
+  const [isSyncingOffline, setIsSyncingOffline] = useState<boolean>(false);
+  const [syncSummaryMessage, setSyncSummaryMessage] = useState<string>('');
+  const [showOfflineModal, setShowOfflineModal] = useState<boolean>(false);
+  const [offlineOrdersList, setOfflineOrdersList] = useState<any[]>([]);
+
   // Customization modal state
   const [showCustomizeModal, setShowCustomizeModal] = useState<boolean>(false);
   const [customizingProduct, setCustomizingProduct] = useState<Product | null>(null);
@@ -175,6 +189,7 @@ export default function KioskTerminal({
 
   // Payment state
   const [paymentMethod, setPaymentMethod] = useState<string>('CASH');
+  const [diningOption, setDiningOption] = useState<'TAKEAWAY' | 'DINE_IN'>('TAKEAWAY');
   const [cashTendered, setCashTendered] = useState<number>(0);
   const [lastOrder, setLastOrder] = useState<any>(null);
   const [isProcessingOrder, setIsProcessingOrder] = useState<boolean>(false);
@@ -194,6 +209,66 @@ export default function KioskTerminal({
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // Offline Engine Initialization & Network Listeners
+  useEffect(() => {
+    const checkPending = async () => {
+      try {
+        const count = await OfflineStorageEngine.getPendingCount();
+        setPendingOfflineCount(count);
+      } catch (e) {}
+    };
+
+    const handleOnline = async () => {
+      setIsOnline(true);
+      await triggerBackgroundSync();
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    checkPending();
+    OfflineStorageEngine.cacheCatalog({ products, currentKiosk, company });
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Background sync trigger
+  const triggerBackgroundSync = async () => {
+    if (isSyncingOffline) return;
+    setIsSyncingOffline(true);
+    try {
+      const result = await OfflineStorageEngine.syncPendingOrders();
+      const count = await OfflineStorageEngine.getPendingCount();
+      setPendingOfflineCount(count);
+
+      if (result.synced > 0) {
+        setSyncSummaryMessage(`Synced ${result.synced} offline order(s) successfully!`);
+        setTimeout(() => setSyncSummaryMessage(''), 4000);
+      }
+    } catch (err) {
+      console.error('Background sync failed:', err);
+    } finally {
+      setIsSyncingOffline(false);
+    }
+  };
+
+  const openOfflineQueueModal = async () => {
+    try {
+      const orders = await OfflineStorageEngine.getPendingOrders();
+      setOfflineOrdersList(orders);
+      setShowOfflineModal(true);
+    } catch (e) {
+      alert('Could not open offline queue.');
+    }
+  };
 
   // Save printer config
   const savePrinterConfig = (updated: PrinterConfig) => {
@@ -487,86 +562,137 @@ export default function KioskTerminal({
     setShowPayModal(true);
   };
 
+  // Process Order with Resilient IndexedDB Offline Fallback
   const handleCompleteOrder = async () => {
     if (isProcessingOrder || cart.length === 0) return;
     setIsProcessingOrder(true);
 
+    const clientUuid = `ORD-${currentKiosk.kiosk_code}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+    const itemsPayload = cart.map((item) => ({
+      product_id: item.product.id,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      modifiers: item.modifiers.map((m) => ({
+        modifier_option_id: m.modifier_option_id,
+        name: m.name,
+        price_adjustment: m.price_adjustment,
+      })),
+    }));
+
+    const payload = {
+      client_uuid: clientUuid,
+      kiosk_id: currentKiosk.id,
+      staff_id: activeShift?.staff_id || null,
+      payment_method: paymentMethod,
+      dining_option: diningOption,
+      discount_amount: 0,
+      items: itemsPayload,
+    };
+
+    let orderInfo: any = null;
+
     try {
-      const payload = {
-        kiosk_id: currentKiosk.id,
-        staff_id: activeShift?.staff_id || null,
-        payment_method: paymentMethod,
-        discount_amount: 0,
-        items: cart.map((item) => ({
-          product_id: item.product.id,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          modifiers: item.modifiers.map((m) => ({
-            modifier_option_id: m.modifier_option_id,
-            name: m.name,
-            price_adjustment: m.price_adjustment,
-          })),
-        })),
-      };
+      if (!navigator.onLine) {
+        throw new Error('OFFLINE_MODE');
+      }
 
       const res = await axios.post('/api/v1/kiosk/order', payload);
       if (res.data.success) {
-        const orderInfo = {
+        orderInfo = {
           ...res.data.order,
           items: cart,
           cashTendered: paymentMethod === 'CASH' ? cashTendered : grandTotal,
           changeDue: paymentMethod === 'CASH' ? Math.max(0, cashTendered - grandTotal) : 0,
+          is_offline: false,
         };
-
-        setLastOrder(orderInfo);
-
-        // Hardware ESC/POS Kick Drawer & Auto-Print Action
-        if (isPrinterConnected) {
-          try {
-            if (printerConfig.autoKickDrawer && paymentMethod === 'CASH') {
-              await serialPrinter.current.kickDrawerOnly();
-            }
-
-            if (printerConfig.autoPrint) {
-              const receiptBytes = EscPosBuilder.buildReceipt(
-                {
-                  companyName: company?.name || 'MULTI-KIOSK',
-                  branchName: currentKiosk.branch.name,
-                  kioskCode: currentKiosk.kiosk_code,
-                  kioskName: currentKiosk.kiosk_name,
-                  orderNumber: orderInfo.order_number,
-                  orderedAt: orderInfo.ordered_at || new Date().toLocaleString(),
-                  items: cart.map((c) => ({
-                    name: c.product.name,
-                    quantity: c.quantity,
-                    unit_price: c.unit_price,
-                    modifiers: c.modifiers,
-                  })),
-                  subtotal: subtotal,
-                  taxAmount: tax,
-                  netAmount: grandTotal,
-                  paymentMethod: paymentMethod,
-                  cashTendered: orderInfo.cashTendered,
-                  changeDue: orderInfo.changeDue,
-                  paperWidth: printerConfig.paperWidth,
-                },
-                false
-              );
-              await serialPrinter.current.print(receiptBytes);
-            }
-          } catch (pErr) {
-            console.error('Auto-print error:', pErr);
-          }
-        }
-
-        setCart([]);
-        setShowPayModal(false);
-        setShowReceiptModal(true);
       }
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Order processing failed. Please try again.');
+      console.warn('Network offline or failed. Buffering order into IndexedDB...', err);
+
+      await OfflineStorageEngine.saveOfflineOrder({
+        client_uuid: clientUuid,
+        kiosk_id: currentKiosk.id,
+        staff_id: activeShift?.staff_id || null,
+        payment_method: paymentMethod,
+        discount_amount: 0,
+        items: itemsPayload,
+        subtotal: subtotal,
+        tax_amount: tax,
+        net_amount: grandTotal,
+        cash_tendered: paymentMethod === 'CASH' ? cashTendered : grandTotal,
+        change_due: paymentMethod === 'CASH' ? Math.max(0, cashTendered - grandTotal) : 0,
+        created_at: new Date().toISOString(),
+      });
+
+      const count = await OfflineStorageEngine.getPendingCount();
+      setPendingOfflineCount(count);
+
+      orderInfo = {
+        order_number: clientUuid,
+        branch_name: currentKiosk.branch.name,
+        kiosk_code: currentKiosk.kiosk_code,
+        kiosk_name: currentKiosk.kiosk_name,
+        items: cart,
+        total_amount: subtotal,
+        tax_amount: tax,
+        net_amount: grandTotal,
+        payment_method: paymentMethod,
+        cashTendered: paymentMethod === 'CASH' ? cashTendered : grandTotal,
+        changeDue: paymentMethod === 'CASH' ? Math.max(0, cashTendered - grandTotal) : 0,
+        ordered_at: new Date().toLocaleString(),
+        is_offline: true,
+      };
     } finally {
       setIsProcessingOrder(false);
+    }
+
+    if (orderInfo) {
+      setLastOrder(orderInfo);
+
+      // Hardware ESC/POS Kick Drawer & Auto-Print Action
+      if (isPrinterConnected) {
+        try {
+          if (printerConfig.autoKickDrawer && paymentMethod === 'CASH') {
+            await serialPrinter.current.kickDrawerOnly();
+          }
+
+          if (printerConfig.autoPrint) {
+            const receiptBytes = EscPosBuilder.buildReceipt(
+              {
+                companyName: company?.name || 'MULTI-KIOSK',
+                branchName: currentKiosk.branch.name,
+                kioskCode: currentKiosk.kiosk_code,
+                kioskName: currentKiosk.kiosk_name,
+                orderNumber: orderInfo.order_number,
+                orderedAt: orderInfo.ordered_at || new Date().toLocaleString(),
+                items: cart.map((c) => ({
+                  name: c.product.name,
+                  quantity: c.quantity,
+                  unit_price: c.unit_price,
+                  modifiers: c.modifiers,
+                })),
+                subtotal: subtotal,
+                taxAmount: tax,
+                netAmount: grandTotal,
+                paymentMethod: paymentMethod,
+                cashTendered: orderInfo.cashTendered,
+                changeDue: orderInfo.changeDue,
+                paperWidth: printerConfig.paperWidth,
+                footerMessage: orderInfo.is_offline ? 'OFFLINE BUFFERED TICKET' : 'Thank you for your visit!',
+              },
+              false
+            );
+            await serialPrinter.current.print(receiptBytes);
+          }
+        } catch (pErr) {
+          console.error('Auto-print error:', pErr);
+        }
+      }
+
+      setCart([]);
+      setShowPayModal(false);
+      setShowReceiptModal(true);
     }
   };
 
@@ -595,6 +721,7 @@ export default function KioskTerminal({
           cashTendered: lastOrder.cashTendered,
           changeDue: lastOrder.changeDue,
           paperWidth: printerConfig.paperWidth,
+          footerMessage: lastOrder.is_offline ? 'OFFLINE BUFFERED TICKET' : 'Thank you for your visit!',
         },
         false
       );
@@ -655,7 +782,7 @@ export default function KioskTerminal({
 
       {/* Kiosk Top Bar */}
       <header className="px-3 py-2 bg-slate-900 border-bottom border-secondary border-opacity-25 d-flex align-items-center justify-content-between flex-wrap gap-2">
-        <div className="d-flex align-items-center gap-3">
+        <div className="d-flex align-items-center gap-2">
           <Link
             href="/dashboard"
             className="btn btn-sm btn-outline-secondary text-white d-flex align-items-center gap-1 rounded-pill px-3"
@@ -672,32 +799,38 @@ export default function KioskTerminal({
             <UtensilsCrossed size={14} /> <span>KDS Screen</span>
           </Link>
 
-          {/* Kiosk Identity & Switcher */}
-          <div className="d-flex align-items-center gap-2">
-            <div className="rounded p-1 bg-primary text-white d-flex align-items-center justify-content-center" style={{ width: 28, height: 28 }}>
-              <Store size={16} />
-            </div>
-            <div>
-              <div className="fw-bold text-white lh-1 small">{currentKiosk.kiosk_name}</div>
-              <div className="text-muted" style={{ fontSize: '0.65rem' }}>
-                {currentKiosk.branch.name} • <span className="font-monospace text-info">{currentKiosk.kiosk_code}</span>
-              </div>
-            </div>
+          {/* Network Status & Offline Queue Pill */}
+          <div className="d-flex align-items-center gap-1">
+            <span
+              className={`badge rounded-pill d-flex align-items-center gap-1 px-2 py-1 ${
+                isOnline ? 'bg-success bg-opacity-25 text-success' : 'bg-danger text-white animate-pulse'
+              }`}
+              title={isOnline ? 'Network Online - Live Sync' : 'Network Offline - Saving to IndexedDB'}
+            >
+              {isOnline ? <Wifi size={12} /> : <WifiOff size={12} />}
+              <span style={{ fontSize: '0.7rem' }}>{isOnline ? 'Online' : 'Offline'}</span>
+            </span>
 
-            {/* Switch Kiosk Dropdown */}
-            {kiosks.length > 1 && (
-              <select
-                className="form-select form-select-sm bg-dark text-white border-secondary border-opacity-50 py-0 ms-2"
-                style={{ width: 140, fontSize: '0.75rem' }}
-                value={currentKiosk.id}
-                onChange={(e) => router.get(`/kiosk/terminal/${e.target.value}`)}
+            {pendingOfflineCount > 0 && (
+              <button
+                onClick={openOfflineQueueModal}
+                className="btn btn-xs btn-warning text-dark rounded-pill fw-bold d-flex align-items-center gap-1 px-2"
+                title="View buffered offline orders queue in IndexedDB"
               >
-                {kiosks.map((k) => (
-                  <option key={k.id} value={k.id}>
-                    {k.kiosk_code} - {k.kiosk_name}
-                  </option>
-                ))}
-              </select>
+                <HardDrive size={11} />
+                <span style={{ fontSize: '0.7rem' }}>{pendingOfflineCount} Queued</span>
+              </button>
+            )}
+
+            {pendingOfflineCount > 0 && isOnline && (
+              <button
+                onClick={triggerBackgroundSync}
+                disabled={isSyncingOffline}
+                className="btn btn-xs btn-outline-info text-info rounded-circle p-1"
+                title="Sync offline queue now"
+              >
+                <RotateCw size={12} className={isSyncingOffline ? 'animate-spin' : ''} />
+              </button>
             )}
           </div>
         </div>
@@ -801,6 +934,14 @@ export default function KioskTerminal({
         </div>
       </header>
 
+      {/* Sync Toast Notification */}
+      {syncSummaryMessage && (
+        <div className="bg-success text-white py-1 px-3 text-center small fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2">
+          <CheckCircle size={14} />
+          <span>{syncSummaryMessage}</span>
+        </div>
+      )}
+
       {/* Main Terminal Viewport (Catalog + Cart) */}
       <div className="flex-grow-1 d-flex flex-column flex-lg-row overflow-hidden">
         {/* Left / Center Catalog Panel */}
@@ -892,6 +1033,26 @@ export default function KioskTerminal({
             )}
           </div>
 
+          {/* Dining Option Switcher */}
+          <div className="px-3 pt-2">
+            <div className="btn-group w-100" role="group">
+              <button
+                type="button"
+                onClick={() => setDiningOption('TAKEAWAY')}
+                className={`btn btn-sm ${diningOption === 'TAKEAWAY' ? 'btn-primary' : 'btn-outline-secondary text-light'}`}
+              >
+                Takeaway
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiningOption('DINE_IN')}
+                className={`btn btn-sm ${diningOption === 'DINE_IN' ? 'btn-primary' : 'btn-outline-secondary text-light'}`}
+              >
+                Dine-In
+              </button>
+            </div>
+          </div>
+
           {/* Cart Items List */}
           <div className="flex-grow-1 p-3 overflow-y-auto">
             {cart.length === 0 ? (
@@ -979,6 +1140,68 @@ export default function KioskTerminal({
           </div>
         </div>
       </div>
+
+      {/* Modal: Offline Queue Buffer Manager */}
+      {showOfflineModal && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }} tabIndex={-1}>
+          <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 500 }}>
+            <div className="modal-content bg-slate-900 text-white border border-secondary shadow-lg">
+              <div className="modal-header border-secondary">
+                <h5 className="modal-title fw-bold d-flex align-items-center gap-2 text-warning">
+                  <Database size={18} />
+                  Offline IndexedDB Order Queue ({offlineOrdersList.length})
+                </h5>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowOfflineModal(false)}></button>
+              </div>
+
+              <div className="modal-body p-3 overflow-y-auto" style={{ maxHeight: 350 }}>
+                {offlineOrdersList.length === 0 ? (
+                  <div className="text-center py-4 text-muted">
+                    <CheckCircle size={36} className="text-success mb-2 mx-auto d-block" />
+                    <div>All offline orders are synchronized!</div>
+                  </div>
+                ) : (
+                  <div className="d-flex flex-column gap-2">
+                    {offlineOrdersList.map((ord) => (
+                      <div key={ord.client_uuid} className="p-2 rounded-3 bg-slate-950 border border-secondary border-opacity-50 font-monospace small">
+                        <div className="d-flex justify-content-between text-white fw-bold">
+                          <span>{ord.client_uuid}</span>
+                          <span className="text-info">RM {Number(ord.net_amount).toFixed(2)}</span>
+                        </div>
+                        <div className="d-flex justify-content-between text-muted" style={{ fontSize: '0.75rem' }}>
+                          <span>{ord.payment_method} • {ord.items.length} items</span>
+                          <span>{new Date(ord.created_at).toLocaleTimeString()}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="modal-footer border-secondary d-flex justify-content-between">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowOfflineModal(false)}>
+                  Close
+                </button>
+                {offlineOrdersList.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await triggerBackgroundSync();
+                      const orders = await OfflineStorageEngine.getPendingOrders();
+                      setOfflineOrdersList(orders);
+                    }}
+                    disabled={isSyncingOffline || !isOnline}
+                    className="btn btn-warning text-dark btn-sm fw-bold d-flex align-items-center gap-1"
+                  >
+                    <RotateCw size={14} className={isSyncingOffline ? 'animate-spin' : ''} />
+                    <span>{isSyncingOffline ? 'Syncing...' : 'Sync Queue Now'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Customize Product Modifiers & Add-ons */}
       {showCustomizeModal && customizingProduct && (
@@ -1513,12 +1736,21 @@ export default function KioskTerminal({
             <div className="modal-content border-0 shadow">
               <div className="modal-header bg-success text-white">
                 <h5 className="modal-title fw-bold d-flex align-items-center gap-2">
-                  <CheckCircle size={20} /> Order Paid & Completed
+                  <CheckCircle size={20} />
+                  {lastOrder.is_offline ? 'Order Buffered Offline' : 'Order Paid & Completed'}
                 </h5>
                 <button type="button" className="btn-close btn-close-white" onClick={() => setShowReceiptModal(false)}></button>
               </div>
 
               <div className="modal-body p-4 font-monospace">
+                {/* Offline Warning Notice if buffered */}
+                {lastOrder.is_offline && (
+                  <div className="alert alert-warning p-2 small mb-3 border-0 d-flex align-items-center gap-2">
+                    <HardDrive size={16} />
+                    <span>Saved locally in IndexedDB. Will sync automatically when online.</span>
+                  </div>
+                )}
+
                 {/* Thermal Receipt Simulation */}
                 <div className="p-3 bg-light border rounded text-center small mb-3">
                   <h5 className="fw-bold mb-0 text-dark">{company?.name || 'MULTI-KIOSK'}</h5>
@@ -1574,7 +1806,7 @@ export default function KioskTerminal({
                     <Layers size={14} /> Recipe & Modifier BOM Deductions Recorded
                   </div>
                   <div style={{ fontSize: '0.75rem' }}>
-                    Base ingredients and add-on recipes automatically deducted from stockroom. Material cost snapshot: RM {lastOrder.total_material_cost?.toFixed(2)}.
+                    Base ingredients and add-on recipes automatically deducted from stockroom. Material cost snapshot: RM {lastOrder.total_material_cost?.toFixed(2) || '0.00'}.
                   </div>
                 </div>
               </div>
