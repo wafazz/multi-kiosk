@@ -28,7 +28,8 @@ import {
   Settings,
   FileText,
   DollarSign,
-  AlertTriangle
+  AlertTriangle,
+  UtensilsCrossed
 } from 'lucide-react';
 import { EscPosBuilder, WebSerialPrinter, ReceiptData } from '../../Utils/escpos';
 
@@ -661,6 +662,14 @@ export default function KioskTerminal({
             title="Return to Headquarters Dashboard"
           >
             <ArrowLeft size={14} /> <span>HQ Admin</span>
+          </Link>
+
+          <Link
+            href="/kds"
+            className="btn btn-sm btn-outline-warning text-warning d-flex align-items-center gap-1 rounded-pill px-3"
+            title="Open Kitchen Display System (KDS)"
+          >
+            <UtensilsCrossed size={14} /> <span>KDS Screen</span>
           </Link>
 
           {/* Kiosk Identity & Switcher */}

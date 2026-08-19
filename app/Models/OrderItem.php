@@ -17,6 +17,7 @@ class OrderItem extends Model
         'unit_price',
         'total_price',
         'unit_cost_snapshot',
+        'is_prepared',
     ];
 
     protected $casts = [
@@ -24,6 +25,7 @@ class OrderItem extends Model
         'unit_price' => 'decimal:2',
         'total_price' => 'decimal:2',
         'unit_cost_snapshot' => 'decimal:2',
+        'is_prepared' => 'boolean',
     ];
 
     public function order(): BelongsTo

@@ -107,6 +107,13 @@
 - **Mid-Shift X-Reports:** On-demand live sales telemetry by tender without closing the drawer.
 - **Blind End-of-Shift Cash Count (Z-Report):** Cashiers count physical notes/coins without seeing system totals. The system automatically computes and logs cash variances (*Over / Short / Match*), freezes the shift financial ledger, and prints an official thermal **Z-Report** with verification signature lines.
 
+### 10. 🍳 Live Kitchen Display System (KDS Screen)
+- **Full-Screen Touch Kitchen Viewport:** Dark-themed high-visibility ticket board designed for barista tablet stands and wall-mounted kitchen monitors.
+- **Live Elapsed Time Alerts:** Dynamic color-coded ticket timers (Green $<5\text{m}$, Yellow $5\text{m}-10\text{m}$, Red pulsing $>10\text{m}$).
+- **Item Checklist & Strike-Through:** Kitchen staff can check off individual customized drinks/food items as they are prepped.
+- **Audio Chime Alerts:** Synthesized Web Audio API bells triggered when new orders arrive and when tickets are marked ready.
+- **Fulfillment State Machine:** `PENDING` $\rightarrow$ `PREPARING` $\rightarrow$ `READY` $\rightarrow$ `COMPLETED` with 1-click **Ticket Recall** capability.
+
 ---
 
 ## 🛠️ Architecture & Technology Stack
@@ -297,22 +304,25 @@ php artisan test
   ✓ the application redirects root to dashboard .................. 0.11s  
 
    PASS  Tests\Feature\KioskOrderAndInventoryTest
-  ✓ kiosk order processes and deducts bom stock ................... 0.12s  
+  ✓ kiosk order processes and deducts bom stock ................... 0.11s  
+
+   PASS  Tests\Feature\KitchenDisplaySystemTest
+  ✓ kds ticket lifecycle and item prepared toggle ................ 0.10s  
 
    PASS  Tests\Feature\ModifierAndBOMDeductionTest
-  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.07s  
+  ✓ kiosk order with modifiers deducts base and modifier boms ..... 0.08s  
 
    PASS  Tests\Feature\ShiftManagementAndZReportTest
-  ✓ shift lifecycle with opening float and z report variance ..... 0.03s  
+  ✓ shift lifecycle with opening float and z report variance ..... 0.06s  
 
    PASS  Tests\Feature\StaffAttendanceAndClockingTest
-  ✓ staff can clock in and clock out at kiosk with pin ............ 0.06s  
+  ✓ staff can clock in and clock out at kiosk with pin ............ 0.07s  
 
    PASS  Tests\Feature\StockTransferLifecycleTest
-  ✓ stock transfer lifecycle moves inventory atomically .......... 0.03s  
+  ✓ stock transfer lifecycle moves inventory atomically .......... 0.05s  
 
-  Tests:    10 passed (46 assertions)
-  Duration: 1.13s
+  Tests:    11 passed (63 assertions)
+  Duration: 2.09s
 ```
 
 ---

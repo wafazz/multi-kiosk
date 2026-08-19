@@ -28,11 +28,19 @@ class Order extends Model
         'payment_method',
         'payment_status',
         'order_status',
+        'fulfillment_status',
+        'dining_option',
         'ordered_at',
+        'preparation_started_at',
+        'ready_at',
+        'completed_at',
     ];
 
     protected $casts = [
         'ordered_at' => 'datetime',
+        'preparation_started_at' => 'datetime',
+        'ready_at' => 'datetime',
+        'completed_at' => 'datetime',
         'total_amount' => 'decimal:2',
         'discount_amount' => 'decimal:2',
         'tax_amount' => 'decimal:2',

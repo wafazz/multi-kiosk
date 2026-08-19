@@ -10,6 +10,7 @@ import {
   Clock,
   CircleDollarSign,
   Banknote,
+  UtensilsCrossed,
   Settings,
   Sliders,
   MonitorPlay,
@@ -34,6 +35,7 @@ export default function AdminLayout({ children, title }: AdminLayoutProps) {
   const navItems = [
     { label: 'Executive Dashboard', href: '/dashboard', icon: LayoutDashboard, pattern: /^\/dashboard/ },
     { label: 'Branches & Kiosks', href: '/branches', icon: Store, pattern: /^\/branches/ },
+    { label: 'Kitchen Display (KDS)', href: '/kds', icon: UtensilsCrossed, pattern: /^\/kds/ },
     { label: 'Products & Recipe BOM', href: '/products', icon: Package, pattern: /^\/products/ },
     { label: 'Modifiers & Add-ons', href: '/modifiers', icon: Sliders, pattern: /^\/modifiers/ },
     { label: 'Raw Materials Master', href: '/raw-materials', icon: Boxes, pattern: /^\/raw-materials/ },

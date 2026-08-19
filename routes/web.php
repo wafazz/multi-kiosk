@@ -83,6 +83,12 @@ Route::post('/api/v1/kiosk/shift/open', [\App\Http\Controllers\ShiftController::
 Route::get('/api/v1/kiosk/shift/x-report', [\App\Http\Controllers\ShiftController::class, 'apiLiveXReport'])->name('api.kiosk.shift.xreport');
 Route::post('/api/v1/kiosk/shift/close', [\App\Http\Controllers\ShiftController::class, 'apiCloseShift'])->name('api.kiosk.shift.close');
 
+// Kitchen Display System (KDS)
+Route::get('/kds', [\App\Http\Controllers\KitchenDisplayController::class, 'index'])->name('kds.index');
+Route::get('/api/v1/kds/tickets', [\App\Http\Controllers\KitchenDisplayController::class, 'apiGetTickets'])->name('api.kds.tickets');
+Route::post('/api/v1/kds/order/{order}/status', [\App\Http\Controllers\KitchenDisplayController::class, 'apiUpdateOrderStatus'])->name('api.kds.order.status');
+Route::post('/api/v1/kds/item/{item}/toggle', [\App\Http\Controllers\KitchenDisplayController::class, 'apiToggleItemPrepared'])->name('api.kds.item.toggle');
+
 // Kiosk Dedicated Terminal UI
 Route::get('/kiosk/terminal/{kioskId?}', [KioskTerminalController::class, 'terminal'])->name('kiosk.terminal');
 Route::post('/api/v1/kiosk/order', [KioskTerminalController::class, 'processOrder'])->name('api.kiosk.order');
